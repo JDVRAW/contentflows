@@ -25,7 +25,7 @@ const fmtSize = (n) => {
 const fmtDate = (d) => d ? new Date(d.replace(' ', 'T') + (d.length <= 10 ? '' : 'Z'))
   .toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
 
-const TYPES = { photoshoot: 'Photoshoot', music_video: 'Music video', commercial: 'Commercial', film: 'Film', project: 'Final project' };
+const TYPES = { photoshoot: 'Photoshoot', music_video: 'Music video', commercial: 'Commercial', film: 'Film', podcast: 'Podcast', project: 'Final project' };
 
 // Header + "Explore" menu panel, adapted from the 1367 Studio navigation.
 // nav = { home, logo, left: [{href,label}], right: [{href,label,cta}], primary: [{href,label,form}],
