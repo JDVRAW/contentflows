@@ -12,6 +12,7 @@ A delivery platform for creatives. Upload final photoshoots, music videos, comme
 - **Downloads**: single files, a picked selection (`/d/:token/zip?ids=1,2,3`), or "Download all" as a zip
 - **Link controls**: optional password, expiry date, downloads on/off, regenerate link to revoke the old one
 - **Tracking**: views and downloads per delivery and per file
+- **Storage plans**: Free (10 GB), Pro ($12/month, 250 GB) and Studio ($29/month, 1 TB), yearly at 10× the monthly price. The limit is the total size of the files a creator keeps, shown as a meter on the dashboard and checked before each upload. Upgrades, plan changes and cancellations go through Stripe
 
 ## Brand
 
@@ -57,6 +58,9 @@ npm start            # http://localhost:3000
 | `S3_SECRET_ACCESS_KEY` | | Its secret |
 | `S3_REGION` | `auto` | Region (R2 uses `auto`) |
 | `S3_FORCE_PATH_STYLE` | | Set to `1` for services that need path-style URLs (MinIO, local test servers) |
+| `STRIPE_SECRET_KEY` | | Stripe secret key (`sk_live_…` or `sk_test_…`). Turns on paid plans |
+| `STRIPE_WEBHOOK_SECRET` | | Signing secret of the webhook endpoint (`whsec_…`) |
+| `OWNER_EMAILS` | | Comma-separated login emails with no storage limit (the people running the site) |
 
 When all four `S3_*` values are set, new uploads go to the bucket and clients stream and download them through signed links that last 6 hours. Without them, files are kept in `DATA_DIR/uploads`. Files uploaded before the switch keep working from the disk.
 
@@ -97,6 +101,17 @@ Big files should not pass through the app server: Railway's proxy and a small vo
 
 If something is off, the upload row says what: a wrong bucket name, a missing `ETag` in the CORS policy, or a token without access.
 
+### Stripe for paid plans
+
+Plans and prices live in `src/plans.js`. The matching Stripe products and prices are created automatically the first time someone picks a plan (lookup keys `cf_pro_month`, `cf_pro_year`, `cf_studio_month`, `cf_studio_year`), so nothing has to be set up by hand in Stripe's product catalog.
+
+1. In Stripe → **Developers → API keys**, copy the **Secret key**. In Railway → **Variables**, add it as `STRIPE_SECRET_KEY`.
+2. In Stripe → **Developers → Webhooks**, add an endpoint at `https://<your-site>/stripe/webhook` that listens for `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated` and `customer.subscription.deleted`. Copy its **Signing secret** into Railway as `STRIPE_WEBHOOK_SECRET`.
+3. In Stripe → **Settings → Billing → Customer portal**, click **Save** once so the "Manage billing" button can open it (card updates and invoices).
+4. Add your own login email to `OWNER_EMAILS` so your account has no storage limit.
+
+Use test-mode keys (`sk_test_…`) first and pay with the card `4242 4242 4242 4242`. Without `STRIPE_SECRET_KEY` the plans page still shows, and paid plans say "Available soon".
+
 ## Structure
 
 ```
@@ -104,6 +119,8 @@ server.js        routes: auth, creator dashboard, uploads, client delivery, down
 src/db.js        SQLite schema (users, sessions, projects, assets, events)
 src/media.js     file type detection and ffmpeg thumbnails
 src/storage.js   object storage (R2/S3): multipart uploads, signed links
+src/plans.js     storage plans, prices and limits
+src/billing.js   Stripe: checkout, plan changes, cancel, billing portal, webhook
 src/views.js     server-rendered HTML
 public/          styles, nav menu, upload client, gallery lightbox, landing hero image
 ```
