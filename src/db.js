@@ -62,4 +62,8 @@ CREATE INDEX IF NOT EXISTS idx_assets_project ON assets(project_id);
 CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id);
 `);
 
+// Where an asset's bytes live: NULL = local disk (DATA_DIR/uploads), 's3' = object storage (R2).
+if (!db.prepare('PRAGMA table_info(assets)').all().some((c) => c.name === 'storage'))
+  db.exec('ALTER TABLE assets ADD COLUMN storage TEXT');
+
 module.exports = { db, DATA_DIR };

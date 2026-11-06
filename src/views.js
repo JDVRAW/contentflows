@@ -319,7 +319,7 @@ function dashboard({ user, projects }) {
   d.addEventListener('close', () => location.hash === '#new' && history.replaceState(null, '', location.pathname)); })();</script>` });
 }
 
-function projectPage({ user, project: p, assets, stats, origin, saved, recent }) {
+function projectPage({ user, project: p, assets, stats, origin, saved, recent, direct }) {
   const link = `${origin}/d/${p.share_token}`;
   return layout({ title: p.title, user, recent, scripts: ['/static/spiral.js', '/static/upload.js'], body: `
 <main class="wrap">
@@ -335,7 +335,7 @@ function projectPage({ user, project: p, assets, stats, origin, saved, recent })
   </section>
 
   <section>
-    <div id="drop" class="drop has-spiral" data-project="${p.id}" data-spiral-host>
+    <div id="drop" class="drop has-spiral" data-project="${p.id}"${direct ? ' data-direct="1"' : ''} data-spiral-host>
       <div class="spiral" data-spiral data-count="22" data-size=".75" aria-hidden="true"><div class="spiral-world"></div></div>
       <div class="drop-body">
         <input type="file" id="file-input" multiple hidden>

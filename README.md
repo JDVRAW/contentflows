@@ -6,7 +6,7 @@ A delivery platform for creatives. Upload final photoshoots, music videos, comme
 
 - **Creator accounts** with a studio name shown to clients
 - **Deliveries** (photoshoot, music video, commercial, film, final project) with client name, email and a personal message
-- **Drag-and-drop uploads** with per-file progress, any file type, large files supported (default limit 10 GB per file)
+- **Drag-and-drop uploads** with per-file progress, any file type, large files supported (default limit 10 GB per file). With object storage set up, files go straight from the browser to the bucket in parts, so big videos never pass through the server
 - **Automatic thumbnails and video poster frames** via ffmpeg
 - **Client delivery page**: cinematic cover, a large-type note from the studio with files, size and expiry at a glance, a gallery laid out like the "One link" scene on the home page (a sand board with a copyable link pill, a Photos/Films switch, and an even grid of rounded tiles where the first tile widens so every row is full), hover download and film previews, pick several files and download just those as one zip, a full-screen viewer with keyboard and swipe navigation, a files list with built-in audio players, and a closing Download all
 - **Downloads**: single files, a picked selection (`/d/:token/zip?ids=1,2,3`), or "Download all" as a zip
@@ -51,6 +51,14 @@ npm start            # http://localhost:3000
 | `MAX_UPLOAD_MB` | `10240` | Max size per file |
 | `FFMPEG_PATH` | `ffmpeg` | Path to ffmpeg binary |
 | `NODE_ENV` | | Set to `production` for secure cookies (HTTPS) |
+| `S3_ENDPOINT` | | Object storage address, e.g. `https://<account-id>.r2.cloudflarestorage.com` (a bucket name on the end is ignored) |
+| `S3_BUCKET` | | Bucket name |
+| `S3_ACCESS_KEY_ID` | | Access key of an API token with object read and write on the bucket |
+| `S3_SECRET_ACCESS_KEY` | | Its secret |
+| `S3_REGION` | `auto` | Region (R2 uses `auto`) |
+| `S3_FORCE_PATH_STYLE` | | Set to `1` for services that need path-style URLs (MinIO, local test servers) |
+
+When all four `S3_*` values are set, new uploads go to the bucket and clients stream and download them through signed links that last 6 hours. Without them, files are kept in `DATA_DIR/uploads`. Files uploaded before the switch keep working from the disk.
 
 ## Deploy
 
@@ -72,7 +80,22 @@ Works on any host with a persistent disk (Railway, Fly.io, Render, a VPS). Mount
 5. Under **Settings → Networking**, click **Generate Domain** for a `*.up.railway.app` address, or add your own domain and set the DNS record Railway shows you.
 6. Every push to the main branch redeploys automatically.
 
-Size the volume for the deliveries you expect: video adds up fast. When storage or download traffic grows, move files to object storage (see Next steps).
+With object storage set up (below), the volume only holds the database and thumbnails, so the smallest size is enough. Without it, size the volume for the deliveries you expect: video adds up fast.
+
+### Cloudflare R2 for the files
+
+Big files should not pass through the app server: Railway's proxy and a small volume both get in the way of multi-GB uploads. With R2 the browser uploads each file straight to the bucket in 16 MB+ parts (four at a time, each retried if the connection drops), and clients download straight from R2, which has no download fees.
+
+1. In the Cloudflare dashboard, open **R2 Object Storage** and create a bucket, e.g. `contentflows`.
+2. In the bucket's **Settings → CORS policy**, add:
+   ```json
+   [{"AllowedOrigins":["*"],"AllowedMethods":["GET","PUT","HEAD"],"AllowedHeaders":["*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3600}]
+   ```
+   `ExposeHeaders: ETag` is required: the browser reads it from each uploaded part. You can replace `*` in `AllowedOrigins` with your site's address.
+3. Under **R2 → Manage API tokens**, create a token with **Object Read & Write** on that bucket.
+4. In Railway → **Variables**, add `S3_ENDPOINT` (the S3 API address from the bucket's settings), `S3_BUCKET`, `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`. Railway redeploys on its own.
+
+If something is off, the upload row says what: a wrong bucket name, a missing `ETag` in the CORS policy, or a token without access.
 
 ## Structure
 
@@ -80,13 +103,13 @@ Size the volume for the deliveries you expect: video adds up fast. When storage 
 server.js        routes: auth, creator dashboard, uploads, client delivery, downloads
 src/db.js        SQLite schema (users, sessions, projects, assets, events)
 src/media.js     file type detection and ffmpeg thumbnails
+src/storage.js   object storage (R2/S3): multipart uploads, signed links
 src/views.js     server-rendered HTML
 public/          styles, nav menu, upload client, gallery lightbox, landing hero image
 ```
 
 ## Next steps
 
-- Object storage (S3 / R2) with signed URLs for large-scale delivery
 - Video transcoding to HLS for adaptive streaming
 - Client favorites, comments and approval
 - Email notifications when a delivery is sent or downloaded
