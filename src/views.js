@@ -29,46 +29,9 @@ const fmtDate = (d) => d ? new Date(d.replace(' ', 'T') + (d.length <= 10 ? '' :
 
 const TYPES = { photoshoot: 'Photoshoot', music_video: 'Music video', commercial: 'Commercial', film: 'Film', podcast: 'Podcast', project: 'Final project' };
 
-// Header + "Explore" menu panel, adapted from the 1367 Studio navigation.
-// nav = { home, logo, left: [{href,label}], right: [{href,label,cta}], primary: [{href,label,form}],
-//         secondary: [{href,label,form}], images: [{href,src}], eyebrow }
-function word(label) {
-  const t = esc(label);
-  return `<span class="menu-mask"><span class="menu-line"><span class="menu-word">${t}</span><span class="menu-word" aria-hidden="true">${t}</span></span></span>`;
-}
-function navLink(l, cls) {
-  if (l.form) return `<button type="submit" form="${l.form}" class="${cls}">${word(l.label)}</button>`;
-  return `<a href="${esc(l.href)}" class="${cls}">${word(l.label)}</a>`;
-}
-function siteNav(nav) {
-  if (!nav) return '';
-  const icon = `<svg class="icon-menu" width="16" height="12" viewBox="0 0 16 12" aria-hidden="true"><path d="M0 1h16M0 6h16M0 11h16" stroke="currentColor" stroke-width="1.4"/></svg>
-    <svg class="icon-close hidden" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M1 1l12 12M13 1L1 13" stroke="currentColor" stroke-width="1.4"/></svg>`;
-  const top = (l) => l.form
-    ? `<button type="submit" form="${l.form}" class="nav-link">${esc(l.label)}</button>`
-    : `<a href="${esc(l.href)}" class="nav-link${l.cta ? ' nav-cta' : ''}">${esc(l.label)}</a>`;
-  return `
-<header id="site-header" data-theme="${nav.theme || 'light'}">
-  <div id="header-pill">
-    <nav class="nav-side left">${(nav.left || []).map(top).join('')}</nav>
-    <a class="header-logo${nav.logo ? '' : ' is-brand'}" href="${esc(nav.home || '/')}" aria-label="${esc(nav.logo || 'ContentFlows home')}">${nav.logo ? esc(nav.logo) : LOGO}</a>
-    <nav class="nav-side right">${(nav.right || []).map(top).join('')}
-      <button id="menu-btn" class="menu-btn" aria-label="Open menu" aria-controls="menu-panel" aria-expanded="false">${icon}</button></nav>
-  </div>
-</header>
-<div id="menu-panel" aria-hidden="true" role="dialog" aria-label="Menu">
-  <div class="menu-bg"></div>
-  <div class="menu-topbar"><span class="menu-fade menu-eyebrow">${esc(nav.eyebrow || 'Explore')}</span>
-    <button id="menu-close" class="menu-close menu-fade" aria-label="Close menu"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M1 1l12 12M13 1L1 13" stroke="currentColor" stroke-width="1.4"/></svg></button></div>
-  <nav class="menu-primary">${(nav.primary || []).map((l, i) => navLink(l, 'menu-primary-link').replace('class="menu-line"', `class="menu-line" style="--i:${i}"`)).join('')}</nav>
-  ${nav.secondary?.length ? `<nav class="menu-secondary">${nav.secondary.map((l, i) => navLink(l, 'menu-secondary-link').replace('class="menu-line"', `class="menu-line" style="--i:${i + (nav.primary || []).length}"`)).join('')}</nav>` : ''}
-  ${nav.images?.length ? `<div class="menu-images menu-fade">${nav.images.slice(0, 3).map((im) => `<a class="menu-image" href="${esc(im.href)}"><img src="${esc(im.src)}" alt="" loading="lazy"></a>`).join('')}</div>` : ''}
-</div>
-<form id="logout-form" method="post" action="/logout" hidden></form>`;
-}
-
 // Marketing header adapted from Antimetal (via Details): logo left, centred links with a
 // sliding dot under the hovered link, a two-column mega-menu on "Product", Log in + CTA right.
+const BURGER = '<svg class="am-i-open" width="16" height="12" viewBox="0 0 16 12" aria-hidden="true"><path d="M0 1h16M0 6h16M0 11h16" stroke="currentColor" stroke-width="1.4"/></svg><svg class="am-i-close" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M1 1l12 12M13 1L1 13" stroke="currentColor" stroke-width="1.4"/></svg>';
 const ARROW = '<svg class="am-arrow" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M6 9.997h8m0 0-2.778-2.667M14 9.997l-2.778 2.667" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const AM_ICONS = {
   quality: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="4.5" stroke="currentColor" stroke-width="1.4"/><rect class="ic-acc" x="12.5" y="12.5" width="5" height="5" rx="1.5" fill="#E5402A"/></svg>',
@@ -84,7 +47,6 @@ function amNav({ base = '', theme = 'dark' } = {}) {
     { href: `${base}#easy`, icon: 'easy', label: 'Easy for clients', desc: 'One link, nothing to install' },
   ];
   const row = (r) => `<a class="am-row" href="${r.href}"><span class="am-ic">${AM_ICONS[r.icon]}</span><span class="am-txt"><b>${r.label}${ARROW}</b><small>${r.desc}</small></span></a>`;
-  const burger = `<svg class="am-i-open" width="16" height="12" viewBox="0 0 16 12" aria-hidden="true"><path d="M0 1h16M0 6h16M0 11h16" stroke="currentColor" stroke-width="1.4"/></svg><svg class="am-i-close" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M1 1l12 12M13 1L1 13" stroke="currentColor" stroke-width="1.4"/></svg>`;
   return `
 <header class="am" id="am-header" data-theme="${theme}">
   <div class="am-bar">
@@ -108,7 +70,7 @@ function amNav({ base = '', theme = 'dark' } = {}) {
     <div class="am-right">
       <a class="am-login" href="/login">Log in</a>
       <a class="am-cta" href="/signup">Start delivering</a>
-      <button class="am-burger" id="am-burger" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="am-mobile">${burger}</button>
+      <button class="am-burger" id="am-burger" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="am-mobile">${BURGER}</button>
     </div>
   </div>
   <div class="am-mobile" id="am-mobile" aria-hidden="true">
@@ -118,24 +80,37 @@ function amNav({ base = '', theme = 'dark' } = {}) {
 </header>`;
 }
 
-function creatorNav(user, recent = []) {
-  return {
-    home: '/dashboard',
-    left: [{ href: '/dashboard', label: 'Deliveries' }, { href: '/dashboard#new', label: 'New delivery' }],
-    right: [{ href: '/pricing', label: 'Plans' }, { form: 'logout-form', label: 'Log out' }],
-    primary: [{ href: '/dashboard', label: 'Deliveries' }, { href: '/dashboard#new', label: 'New delivery' },
-      ...recent.slice(0, 2).map((r) => ({ href: `/projects/${r.id}`, label: r.title.length > 22 ? r.title.slice(0, 21) + '…' : r.title }))],
-    secondary: [{ href: '/dashboard', label: user.studio || user.name }, { href: '/pricing', label: 'Plans and storage' }, { form: 'logout-form', label: 'Log out' }],
-    images: recent.filter((r) => r.cover_id).map((r) => ({ href: `/projects/${r.id}`, src: `/d/${r.share_token}/thumb/${r.cover_id}` })),
-  };
+// The home page header for signed-in creators: same bar, sliding dot and mobile drawer,
+// with the app's own links (the home page sends signed-in visitors to their deliveries).
+function appNav(user, current = '') {
+  const links = [{ href: '/dashboard', label: 'Deliveries' }, { href: '/pricing', label: 'Plans' }];
+  const link = (l, cls) => `<a class="${cls}" href="${l.href}"${l.href === current ? ' aria-current="page"' : ''}>${l.label}</a>`;
+  return `
+<header class="am" id="am-header" data-theme="light">
+  <div class="am-bar">
+    <a class="am-logo header-logo is-brand" href="/dashboard" aria-label="ContentFlows deliveries">${LOGO}</a>
+    <nav class="am-links" id="am-links" aria-label="Main">${links.map((l) => link(l, 'am-link')).join('')}<span class="am-dot" id="am-dot" aria-hidden="true"></span></nav>
+    <div class="am-right">
+      <span class="am-studio" title="${esc(user.email)}">${esc(user.studio || user.name)}</span>
+      <button class="am-login" type="submit" form="logout-form">Log out</button>
+      <a class="am-cta" href="/dashboard#new">New delivery</a>
+      <button class="am-burger" id="am-burger" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="am-mobile">${BURGER}</button>
+    </div>
+  </div>
+  <div class="am-mobile" id="am-mobile" aria-hidden="true">
+    <nav class="am-m-links"><a href="/dashboard">Deliveries</a><a href="/dashboard#new">New delivery</a><a href="/pricing">Plans and storage</a></nav>
+    <div class="am-m-foot"><button class="am-m-login" type="submit" form="logout-form">Log out</button><a class="fs-cta" href="/dashboard#new">New delivery</a></div>
+  </div>
+</header>
+<form id="logout-form" method="post" action="/logout" hidden></form>`;
 }
 
 // Version tag on CSS/JS links so browsers fetch fresh files after every deploy instead of a cached copy.
 const ASSET_V = (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 8) || Date.now().toString(36);
 const asset = (u) => `${u}?v=${ASSET_V}`;
 
-function layout({ title, body, user, nav, header, recent, bodyClass = '', scripts = [] }) {
-  if (!nav && user) nav = creatorNav(user, recent);
+function layout({ title, body, user, header, current, bodyClass = '', scripts = [] }) {
+  if (!header && user) header = appNav(user, current);
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -148,10 +123,10 @@ function layout({ title, body, user, nav, header, recent, bodyClass = '', script
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#111113">
 <link rel="stylesheet" href="${asset('/static/styles.css')}">
-</head><body class="${bodyClass}${nav || header ? ' has-nav' : ''}">
-${header || siteNav(nav)}
+</head><body class="${bodyClass}${header ? ' has-nav' : ''}">
+${header || ''}
 ${body}
-${header ? `<script src="${asset('/static/am-nav.js')}"></script>` : nav ? `<script src="${asset('/static/nav.js')}"></script>` : ''}
+${header ? `<script src="${asset('/static/am-nav.js')}"></script>` : ''}
 ${scripts.map((s) => `<script src="${asset(s)}"></script>`).join('')}
 </body></html>`;
 }
@@ -319,7 +294,7 @@ function storageMeter({ used, plan }, { compact = false } = {}) {
 }
 
 function dashboard({ user, projects, usage }) {
-  return layout({ title: 'Deliveries', user, recent: projects, body: `
+  return layout({ title: 'Deliveries', user, current: '/dashboard', body: `
 <main class="wrap">
   <div class="page-head"><div><h1>Deliveries</h1><p class="muted">${projects.length} project${projects.length === 1 ? '' : 's'}</p></div>
   <a class="btn" href="#new">New delivery</a></div>
@@ -347,10 +322,10 @@ function dashboard({ user, projects, usage }) {
   d.addEventListener('close', () => location.hash === '#new' && history.replaceState(null, '', location.pathname)); })();</script>` });
 }
 
-function projectPage({ user, project: p, assets, stats, origin, saved, recent, direct, storageMissing, usage }) {
+function projectPage({ user, project: p, assets, stats, origin, saved, direct, storageMissing, usage }) {
   const link = `${origin}/d/${p.share_token}`;
   const left = usage && usage.plan.limit !== Infinity ? usage.plan.limit - usage.used : null;
-  return layout({ title: p.title, user, recent, scripts: ['/static/spiral.js', '/static/upload.js'], body: `
+  return layout({ title: p.title, user, current: '/dashboard', scripts: ['/static/spiral.js', '/static/upload.js'], body: `
 <main class="wrap">
   <a class="back" href="/dashboard">← All deliveries</a>
   <div class="page-head"><div><span class="tag">${esc(TYPES[p.type] || p.type)}</span><h1>${esc(p.title)}</h1>
@@ -470,7 +445,7 @@ function pricingPage({ user, usage, plans, billingOn, subscribed, notice = {} })
   const pastDue = subscribed && user.plan_status === 'past_due';
 
   return layout({
-    title: 'Plans', user, bodyClass: user ? '' : 'pricing-public', header: user ? null : amNav({ base: '/', theme: 'light' }), body: `
+    title: 'Plans', user, current: '/pricing', bodyClass: user ? '' : 'pricing-public', header: user ? null : amNav({ base: '/', theme: 'light' }), body: `
 <main class="wrap pricing" data-header-theme="light">
   <div class="pricing-head">
     <p class="eyebrow">Plans</p>
