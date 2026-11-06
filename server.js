@@ -61,7 +61,8 @@ app.use((req, res, next) => {
   if (t) {
     const row = db.prepare(`SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token = ? AND s.expires_at > ?`).get(t, Date.now());
-    if (row) req.user = row;
+    // Seen through the current Stripe key: a test-mode subscription doesn't count on live keys.
+    if (row) req.user = billing.view(row);
   }
   next();
 });
@@ -587,6 +588,7 @@ if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`ContentFlows running on http://localhost:${PORT}`);
     setTimeout(() => backfillThumbs().catch((e) => console.error('backfill', e)), 2000);
+    billing.labelOldCustomers().catch((e) => console.error('stripe mode check', e.message));
   });
 }
 module.exports = app;

@@ -11,6 +11,9 @@ const val = (k) => String(process.env[k] || '').trim().replace(/^(["'])(.*)\1$/,
 const KEY = val('STRIPE_SECRET_KEY');
 const WEBHOOK_SECRET = val('STRIPE_WEBHOOK_SECRET');
 const enabled = !!KEY;
+// Test keys and live keys see completely separate data in Stripe.
+const MODE = /^(sk|rk)_live_/.test(KEY) ? 'live' : 'test';
+const modeOf = (livemode) => (livemode ? 'live' : 'test');
 
 // STRIPE_API_URL points the client at a local stand-in for tests.
 const api = val('STRIPE_API_URL') ? new URL(val('STRIPE_API_URL')) : null;
@@ -43,18 +46,48 @@ async function priceFor(plan, interval) {
 async function customerFor(user) {
   if (user.stripe_customer_id) return user.stripe_customer_id;
   const c = await stripe.customers.create({ email: user.email, name: user.studio || user.name, metadata: { user_id: String(user.id) } });
-  db.prepare('UPDATE users SET stripe_customer_id = ? WHERE id = ?').run(c.id, user.id);
+  // A new customer starts with no subscription under this key (any from the other mode is dropped).
+  db.prepare(`UPDATE users SET stripe_customer_id = ?, stripe_mode = ?, plan = 'free', plan_interval = NULL, plan_status = NULL,
+    plan_period_end = NULL, plan_cancel_at_end = 0, stripe_subscription_id = NULL WHERE id = ?`).run(c.id, MODE, user.id);
   return c.id;
 }
 
 const LIVE = ['active', 'trialing', 'past_due'];
 const hasLiveSubscription = (user) => !!user.stripe_subscription_id && LIVE.includes(user.plan_status);
 
+// A user whose Stripe customer and subscription were made with the other kind of key (say, test
+// data after switching to live keys) is shown as a Free account with no Stripe data, so they can
+// subscribe again under the current key. The old data is only replaced once they do.
+const FREE = { plan: 'free', plan_interval: null, plan_status: null, plan_period_end: null, plan_cancel_at_end: 0,
+  stripe_customer_id: null, stripe_subscription_id: null };
+function view(user) {
+  if (!user || !enabled || !user.stripe_mode || user.stripe_mode === MODE) return user;
+  return { ...user, ...FREE };
+}
+
+// Accounts saved before stripe_mode existed: ask Stripe which mode their customer belongs to.
+async function labelOldCustomers() {
+  if (!enabled) return;
+  const rows = db.prepare('SELECT id, stripe_customer_id FROM users WHERE stripe_customer_id IS NOT NULL AND stripe_mode IS NULL').all();
+  for (const r of rows) {
+    let mode;
+    try { mode = modeOf((await stripe.customers.retrieve(r.stripe_customer_id)).livemode); } catch (e) {
+      // A customer this key can't find was made with the other kind of key.
+      if (e.code !== 'resource_missing') { console.error('stripe mode check', e.message); continue; }
+      mode = MODE === 'live' ? 'test' : 'live';
+    }
+    db.prepare('UPDATE users SET stripe_mode = ? WHERE id = ?').run(mode, r.id);
+  }
+  if (rows.length) console.log(`Checked the Stripe mode of ${rows.length} account(s)`);
+}
+
 // Copy a Stripe subscription onto the user it belongs to.
 function syncSubscription(sub) {
+  // Events from the other mode (a test webhook still pointing here after going live) don't apply.
+  if (typeof sub.livemode === 'boolean' && modeOf(sub.livemode) !== MODE) return null;
   const customer = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id;
-  const user = db.prepare('SELECT * FROM users WHERE stripe_customer_id = ?').get(customer)
-    || (sub.metadata?.user_id && db.prepare('SELECT * FROM users WHERE id = ?').get(sub.metadata.user_id));
+  const user = view(db.prepare('SELECT * FROM users WHERE stripe_customer_id = ?').get(customer)
+    || (sub.metadata?.user_id && db.prepare('SELECT * FROM users WHERE id = ?').get(sub.metadata.user_id)));
   if (!user) return null;
   // Ignore events for an older subscription once the user has moved to a newer one.
   if (user.stripe_subscription_id && user.stripe_subscription_id !== sub.id && hasLiveSubscription(user) && !LIVE.includes(sub.status)) return user.id;
@@ -65,8 +98,8 @@ function syncSubscription(sub) {
   const periodEnd = item?.current_period_end || sub.current_period_end || null;
   if (LIVE.includes(sub.status) && plan) {
     db.prepare(`UPDATE users SET plan = ?, plan_interval = ?, plan_status = ?, stripe_subscription_id = ?, stripe_customer_id = ?,
-      plan_period_end = ?, plan_cancel_at_end = ? WHERE id = ?`)
-      .run(plan, interval, sub.status, sub.id, customer, periodEnd, sub.cancel_at_period_end ? 1 : 0, user.id);
+      plan_period_end = ?, plan_cancel_at_end = ?, stripe_mode = ? WHERE id = ?`)
+      .run(plan, interval, sub.status, sub.id, customer, periodEnd, sub.cancel_at_period_end ? 1 : 0, MODE, user.id);
   } else if (['canceled', 'unpaid', 'incomplete_expired'].includes(sub.status)) {
     db.prepare(`UPDATE users SET plan = 'free', plan_interval = NULL, plan_status = ?, stripe_subscription_id = NULL,
       plan_period_end = NULL, plan_cancel_at_end = 0 WHERE id = ?`).run(sub.status, user.id);
@@ -131,4 +164,5 @@ async function handleWebhook(rawBody, signature) {
   return event.type;
 }
 
-module.exports = { enabled, webhookReady: enabled && !!WEBHOOK_SECRET, choosePlan, finishCheckout, setCancelAtEnd, portalUrl, handleWebhook, hasLiveSubscription };
+module.exports = { enabled, mode: MODE, webhookReady: enabled && !!WEBHOOK_SECRET, view, labelOldCustomers,
+  choosePlan, finishCheckout, setCancelAtEnd, portalUrl, handleWebhook, hasLiveSubscription };
