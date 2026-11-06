@@ -8,6 +8,7 @@ const multer = require('multer');
 const { ZipArchive } = require('archiver');
 const { db, DATA_DIR } = require('./src/db');
 const { kindOf, makeThumb } = require('./src/media');
+const storage = require('./src/storage');
 const V = require('./src/views');
 
 const PORT = process.env.PORT || 3000;
@@ -20,6 +21,7 @@ const SECRET = process.env.SESSION_SECRET || (() => {
   return s;
 })();
 const MAX_UPLOAD = Number(process.env.MAX_UPLOAD_MB || 10240) * 1024 * 1024;
+const LIMIT_TEXT = MAX_UPLOAD >= 1024 ** 3 ? `${+(MAX_UPLOAD / 1024 ** 3).toFixed(1)} GB` : `${Math.round(MAX_UPLOAD / 1024 ** 2)} MB`;
 const UPLOADS = path.join(DATA_DIR, 'uploads');
 const THUMBS = path.join(DATA_DIR, 'thumbs');
 
@@ -124,6 +126,7 @@ app.post('/projects', requireUser, (req, res) => {
 
 function ownProject(req, res, next) {
   const p = db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!p && req.xhr) return res.status(404).json({ ok: false, error: 'This delivery no longer exists.' });
   if (!p) return res.status(404).send(V.messagePage('Not found', 'That delivery does not exist.'));
   req.project = p;
   next();
@@ -142,7 +145,7 @@ app.get('/projects/:id', requireUser, ownProject, (req, res) => {
     FROM projects p WHERE p.user_id = ? ORDER BY p.created_at DESC, p.id DESC LIMIT 3`).all(req.user.id);
   res.send(V.projectPage({ user: req.user, project: p, assets, saved: req.query.saved, recent,
     stats: { views: stats.views || 0, downloads: stats.downloads || 0, last: stats.last },
-    origin: process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}` }));
+    origin: process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`, direct: storage.enabled }));
 });
 
 app.post('/projects/:id/settings', requireUser, ownProject, (req, res) => {
@@ -170,7 +173,8 @@ app.post('/projects/:id/cover/:aid', requireUser, ownProject, (req, res) => {
 });
 
 function removeAssetFiles(a) {
-  fs.rm(path.join(UPLOADS, String(a.project_id), a.stored_name), { force: true }, () => {});
+  if (a.storage === 's3') { if (storage.enabled) storage.remove(a.stored_name); }
+  else fs.rm(path.join(UPLOADS, String(a.project_id), a.stored_name), { force: true }, () => {});
   if (a.thumb_name) fs.rm(path.join(THUMBS, a.thumb_name), { force: true }, () => {});
 }
 
@@ -199,20 +203,80 @@ const upload = multer({
   limits: { fileSize: MAX_UPLOAD },
 });
 
+const insertAsset = db.prepare(`INSERT INTO assets (project_id, original_name, stored_name, mime, size, kind, storage, position)
+  VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM assets WHERE project_id = ?))`);
+
 app.post('/projects/:id/upload', requireUser, ownProject, upload.array('files'), async (req, res) => {
-  const insert = db.prepare(`INSERT INTO assets (project_id, original_name, stored_name, mime, size, kind, position)
-    VALUES (?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM assets WHERE project_id = ?))`);
   const out = [];
   for (const f of req.files || []) {
     // Browsers send filenames as latin1 through multipart; recover UTF-8 names.
     const name = Buffer.from(f.originalname, 'latin1').toString('utf8');
     const kind = kindOf(f.mimetype, name);
-    const r = insert.run(req.project.id, name, f.filename, f.mimetype, f.size, kind, req.project.id);
+    const r = insertAsset.run(req.project.id, name, f.filename, f.mimetype, f.size, kind, null, req.project.id);
     const thumb = await makeThumb(f.path, kind, r.lastInsertRowid);
     if (thumb) db.prepare('UPDATE assets SET thumb_name = ? WHERE id = ?').run(thumb, r.lastInsertRowid);
     out.push({ id: r.lastInsertRowid, name, kind, size: f.size });
   }
   res.json({ ok: true, files: out });
+});
+
+// ---------- creator: direct uploads to object storage (R2) ----------
+// The browser asks for signed part URLs, PUTs the file's parts straight to the bucket, then
+// reports the parts back here. File bytes never pass through this server.
+const direct = [requireUser, ownProject, (req, res, next) => (storage.enabled ? next()
+  : res.status(404).json({ ok: false, error: 'Direct uploads are not set up on this server.' })), express.json({ limit: '2mb' })];
+const keyPrefix = (req) => `projects/${req.project.id}/`;
+const fileInfo = (req, res) => {
+  const b = req.body || {};
+  const key = String(b.key || ''), uploadId = String(b.uploadId || '');
+  if (!uploadId || !key.startsWith(keyPrefix(req)) || !/^[\w\-./]+$/.test(key) || key.includes('..')) {
+    res.status(400).json({ ok: false, error: 'This upload is not valid. Try again.' });
+    return null;
+  }
+  return { key, uploadId, b };
+};
+
+app.post('/projects/:id/uploads/start', ...direct, async (req, res) => {
+  const { name, type } = req.body || {};
+  const size = Number(req.body?.size);
+  if (!name || !Number.isFinite(size) || size < 0) return res.status(400).json({ ok: false, error: 'Missing file details.' });
+  if (size > MAX_UPLOAD) return res.status(413).json({ ok: false, error: `This file is over the ${LIMIT_TEXT} limit.` });
+  const ext = path.extname(String(name)).toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 12);
+  const key = keyPrefix(req) + token(12) + ext;
+  const uploadId = await storage.startUpload(key, String(type || '').slice(0, 200));
+  res.json({ ok: true, key, uploadId, partSize: storage.partSizeFor(size) });
+});
+
+app.post('/projects/:id/uploads/sign', ...direct, async (req, res) => {
+  const f = fileInfo(req, res);
+  if (!f) return;
+  const nums = (Array.isArray(f.b.parts) ? f.b.parts : []).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= 10000);
+  if (!nums.length || nums.length > 100) return res.status(400).json({ ok: false, error: 'This upload is not valid. Try again.' });
+  res.json({ ok: true, urls: await storage.signParts(f.key, f.uploadId, nums) });
+});
+
+app.post('/projects/:id/uploads/complete', ...direct, async (req, res) => {
+  const f = fileInfo(req, res);
+  if (!f) return;
+  const parts = Array.isArray(f.b.parts) ? f.b.parts : [];
+  if (!parts.length || parts.some((p) => !p || !p.ETag || !Number.isInteger(+p.PartNumber)))
+    return res.status(400).json({ ok: false, error: 'The upload finished without all of its parts. Try again.' });
+  const name = String(f.b.name || 'file').slice(0, 255);
+  const type = String(f.b.type || '').slice(0, 200) || null;
+  const size = await storage.completeUpload(f.key, f.uploadId, parts);
+  const kind = kindOf(type || '', name);
+  const r = insertAsset.run(req.project.id, name, f.key, type, size, kind, 's3', req.project.id);
+  // ffmpeg reads just enough of the file from the bucket to make the thumbnail.
+  const thumb = await makeThumb(await storage.signedGet(f.key, { expiresIn: 600 }), kind, r.lastInsertRowid);
+  if (thumb) db.prepare('UPDATE assets SET thumb_name = ? WHERE id = ?').run(thumb, r.lastInsertRowid);
+  res.json({ ok: true, files: [{ id: r.lastInsertRowid, name, kind, size }] });
+});
+
+app.post('/projects/:id/uploads/abort', ...direct, async (req, res) => {
+  const f = fileInfo(req, res);
+  if (!f) return;
+  await storage.abortUpload(f.key, f.uploadId);
+  res.json({ ok: true });
 });
 
 // ---------- client: delivery ----------
@@ -259,19 +323,28 @@ app.get('/d/:token/thumb/:aid', loadDelivery, requireUnlocked, (req, res) => {
   res.sendFile(path.join(THUMBS, a.thumb_name), { maxAge: '7d' });
 });
 
+// Files in object storage are served by the bucket itself through a short-lived signed link.
+async function sendFromStorage(res, a, attachment) {
+  if (!storage.enabled) return res.sendStatus(404);
+  res.set('Cache-Control', 'no-store');
+  res.redirect(302, await storage.signedGet(a.stored_name, { name: a.original_name, contentType: a.mime, attachment }));
+}
+
 // Inline streaming (sendFile handles HTTP Range requests for video seeking).
-app.get('/d/:token/media/:aid', loadDelivery, requireUnlocked, (req, res) => {
+app.get('/d/:token/media/:aid', loadDelivery, requireUnlocked, async (req, res) => {
   const a = getAsset(req);
   if (!a) return res.sendStatus(404);
+  if (a.storage === 's3') return sendFromStorage(res, a, false);
   res.type(a.mime || 'application/octet-stream');
   res.sendFile(path.join(UPLOADS, String(a.project_id), a.stored_name), { headers: { 'Content-Disposition': 'inline' } });
 });
 
-app.get('/d/:token/download/:aid', loadDelivery, requireUnlocked, (req, res) => {
+app.get('/d/:token/download/:aid', loadDelivery, requireUnlocked, async (req, res) => {
   if (!req.project.allow_download && !req.isOwner) return res.sendStatus(403);
   const a = getAsset(req);
   if (!a) return res.sendStatus(404);
   if (!req.headers.range) track(req, 'download', a.id);
+  if (a.storage === 's3') return sendFromStorage(res, a, true);
   res.download(path.join(UPLOADS, String(a.project_id), a.stored_name), a.original_name);
 });
 
@@ -287,30 +360,60 @@ app.get('/d/:token/zip', loadDelivery, requireUnlocked, (req, res) => {
   const safe = p.title.replace(/[^\w\- ]+/g, ' ').replace(/\s+/g, ' ').trim() || 'delivery';
   res.attachment(`${safe}${ids.size ? ' (selection)' : ''}.zip`);
   const zip = new ZipArchive({ store: true }); // media is already compressed
-  zip.on('error', () => res.end());
+  zip.on('error', (e) => { console.error('zip', e.message); res.destroy(); });
+  res.on('close', () => { if (!res.writableFinished) zip.abort(); });
   zip.pipe(res);
   const used = new Set();
-  for (const a of assets) {
+  const entries = assets.map((a) => {
     let n = a.original_name, i = 1;
     while (used.has(n)) n = a.original_name.replace(/(\.[^.]*)?$/, ` (${i++})$1`);
     used.add(n);
-    zip.file(path.join(UPLOADS, String(a.project_id), a.stored_name), { name: n });
-  }
-  zip.finalize();
+    return { a, name: n };
+  });
+  // Add files one at a time, so only one download from the bucket is open at once.
+  const next = async () => {
+    const e = entries.shift();
+    if (!e) return zip.finalize();
+    if (e.a.storage !== 's3') return zip.file(path.join(UPLOADS, String(e.a.project_id), e.a.stored_name), { name: e.name });
+    try {
+      if (!storage.enabled) throw new Error('object storage is not configured');
+      zip.append(await storage.getStream(e.a.stored_name), { name: e.name });
+    } catch (err) { console.error('zip', e.a.stored_name, err.message); res.destroy(); }
+  };
+  zip.on('entry', () => { if (!res.destroyed) next(); });
+  next();
 });
+
+// Errors from R2, explained in terms of the setup step that fixes them.
+function storageError(err) {
+  if (!err.$metadata && !['ENOTFOUND', 'ECONNREFUSED', 'ETIMEDOUT'].includes(err.code)) return null;
+  const why = {
+    NoSuchBucket: 'The bucket in S3_BUCKET does not exist.',
+    InvalidAccessKeyId: 'The R2 access key in S3_ACCESS_KEY_ID is wrong.',
+    SignatureDoesNotMatch: 'The R2 secret in S3_SECRET_ACCESS_KEY is wrong.',
+    AccessDenied: 'The R2 API token is not allowed to write to this bucket.',
+    Unauthorized: 'The R2 API token is not allowed to write to this bucket.',
+    NoSuchUpload: 'This upload expired on the storage side. Try again.',
+    InvalidPart: 'A part of this upload went missing. Try again.',
+    ENOTFOUND: 'The address in S3_ENDPOINT can’t be reached.',
+    ECONNREFUSED: 'The address in S3_ENDPOINT can’t be reached.',
+    ETIMEDOUT: 'Cloud storage took too long to answer. Try again.',
+  };
+  return [502, `Cloud storage error: ${why[err.name] || why[err.code] || err.message || err.name}`];
+}
 
 app.use((err, req, res, next) => {
   console.error(req.method, req.originalUrl, err);
   if (req.xhr) {
     // Upload errors go back as JSON so the uploader can show the reason on the file's row.
     const known = {
-      LIMIT_FILE_SIZE: [413, `This file is over the ${MAX_UPLOAD >= 1024 ** 3 ? `${+(MAX_UPLOAD / 1024 ** 3).toFixed(1)} GB` : `${Math.round(MAX_UPLOAD / 1024 ** 2)} MB`} limit.`],
+      LIMIT_FILE_SIZE: [413, `This file is over the ${LIMIT_TEXT} limit.`],
       ENOSPC: [507, 'The server is out of storage space. Make the volume bigger in Railway.'],
       EDQUOT: [507, 'The server is out of storage space. Make the volume bigger in Railway.'],
       EACCES: [500, "The server can't write to its storage folder."],
       EROFS: [500, "The server's storage folder is read-only."],
     }[err.code];
-    const [status, error] = known || [500, `Server error: ${err.message || err.code || 'unknown'}`];
+    const [status, error] = known || storageError(err) || [500, `Server error: ${err.message || err.code || 'unknown'}`];
     if (!res.headersSent) return res.status(status).json({ ok: false, error });
     return;
   }

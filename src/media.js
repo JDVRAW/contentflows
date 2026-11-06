@@ -15,6 +15,7 @@ function kindOf(mime = '', name = '') {
 }
 
 // Generate a JPEG thumbnail (images) or poster frame (videos) with ffmpeg.
+// srcPath is a local file or a signed https URL (ffmpeg reads only the bytes it needs from it).
 // Resolves to the thumb filename, or null if ffmpeg is missing or fails.
 function makeThumb(srcPath, kind, id) {
   if (kind !== 'image' && kind !== 'video') return Promise.resolve(null);

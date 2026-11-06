@@ -125,6 +125,10 @@ function creatorNav(user, recent = []) {
   };
 }
 
+// Version tag on CSS/JS links so browsers fetch fresh files after every deploy instead of a cached copy.
+const ASSET_V = (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 8) || Date.now().toString(36);
+const asset = (u) => `${u}?v=${ASSET_V}`;
+
 function layout({ title, body, user, nav, header, recent, bodyClass = '', scripts = [] }) {
   if (!nav && user) nav = creatorNav(user, recent);
   return `<!doctype html>
@@ -138,12 +142,12 @@ function layout({ title, body, user, nav, header, recent, bodyClass = '', script
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#111113">
-<link rel="stylesheet" href="/static/styles.css">
+<link rel="stylesheet" href="${asset('/static/styles.css')}">
 </head><body class="${bodyClass}${nav || header ? ' has-nav' : ''}">
 ${header || siteNav(nav)}
 ${body}
-${header ? '<script src="/static/am-nav.js"></script>' : nav ? '<script src="/static/nav.js"></script>' : ''}
-${scripts.map((s) => `<script src="${s}"></script>`).join('')}
+${header ? `<script src="${asset('/static/am-nav.js')}"></script>` : nav ? `<script src="${asset('/static/nav.js')}"></script>` : ''}
+${scripts.map((s) => `<script src="${asset(s)}"></script>`).join('')}
 </body></html>`;
 }
 
@@ -319,7 +323,7 @@ function dashboard({ user, projects }) {
   d.addEventListener('close', () => location.hash === '#new' && history.replaceState(null, '', location.pathname)); })();</script>` });
 }
 
-function projectPage({ user, project: p, assets, stats, origin, saved, recent }) {
+function projectPage({ user, project: p, assets, stats, origin, saved, recent, direct }) {
   const link = `${origin}/d/${p.share_token}`;
   return layout({ title: p.title, user, recent, scripts: ['/static/spiral.js', '/static/upload.js'], body: `
 <main class="wrap">
@@ -335,7 +339,7 @@ function projectPage({ user, project: p, assets, stats, origin, saved, recent })
   </section>
 
   <section>
-    <div id="drop" class="drop has-spiral" data-project="${p.id}" data-spiral-host>
+    <div id="drop" class="drop has-spiral" data-project="${p.id}"${direct ? ' data-direct="1"' : ''} data-spiral-host>
       <div class="spiral" data-spiral data-count="22" data-size=".75" aria-hidden="true"><div class="spiral-world"></div></div>
       <div class="drop-body">
         <input type="file" id="file-input" multiple hidden>
