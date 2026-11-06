@@ -9,19 +9,23 @@ const {
 } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
-const env = process.env;
-const enabled = !!(env.S3_ENDPOINT && env.S3_BUCKET && env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY);
-const Bucket = enabled ? env.S3_BUCKET.trim() : null;
+// Values pasted into a host's settings often carry stray spaces or quotes.
+const val = (k) => String(process.env[k] || '').trim().replace(/^(["'])(.*)\1$/, '$2').trim();
+const REQUIRED = ['S3_ENDPOINT', 'S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'];
+const missing = REQUIRED.filter((k) => !val(k));
+const enabled = missing.length === 0;
+const Bucket = enabled ? val('S3_BUCKET') : null;
 // Cloudflare shows the bucket's S3 address with the bucket name on the end; only the host part is needed.
-const endpoint = enabled ? new URL(/^https?:\/\//.test(env.S3_ENDPOINT.trim()) ? env.S3_ENDPOINT.trim() : `https://${env.S3_ENDPOINT.trim()}`).origin : null;
+const endpoint = enabled ? new URL(/^https?:\/\//.test(val('S3_ENDPOINT')) ? val('S3_ENDPOINT') : `https://${val('S3_ENDPOINT')}`).origin : null;
+const describe = enabled ? `bucket "${Bucket}" at ${new URL(endpoint).host}` : `local disk (missing ${missing.join(', ')})`;
 const client = enabled ? new S3Client({
-  region: env.S3_REGION || 'auto',
+  region: val('S3_REGION') || 'auto',
   endpoint,
-  forcePathStyle: env.S3_FORCE_PATH_STYLE === '1',
+  forcePathStyle: val('S3_FORCE_PATH_STYLE') === '1',
   // Without these, newer SDKs add checksum parameters to signed URLs that a browser PUT can't satisfy.
   requestChecksumCalculation: 'WHEN_REQUIRED',
   responseChecksumValidation: 'WHEN_REQUIRED',
-  credentials: { accessKeyId: env.S3_ACCESS_KEY_ID.trim(), secretAccessKey: env.S3_SECRET_ACCESS_KEY.trim() },
+  credentials: { accessKeyId: val('S3_ACCESS_KEY_ID'), secretAccessKey: val('S3_SECRET_ACCESS_KEY') },
 }) : null;
 
 const MiB = 1024 * 1024;
@@ -67,4 +71,7 @@ async function getStream(Key) {
 
 const remove = (Key) => client.send(new DeleteObjectCommand({ Bucket, Key })).catch((e) => console.error('storage remove', Key, e.message));
 
-module.exports = { enabled, partSizeFor, startUpload, signParts, completeUpload, abortUpload, signedGet, getStream, remove };
+// Some S3 variables set but not all: almost always a setup slip worth pointing out.
+const partlySet = missing.length > 0 && missing.length < REQUIRED.length ? missing : null;
+
+module.exports = { enabled, describe, partlySet, partSizeFor, startUpload, signParts, completeUpload, abortUpload, signedGet, getStream, remove };

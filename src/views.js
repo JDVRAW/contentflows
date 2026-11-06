@@ -323,7 +323,7 @@ function dashboard({ user, projects }) {
   d.addEventListener('close', () => location.hash === '#new' && history.replaceState(null, '', location.pathname)); })();</script>` });
 }
 
-function projectPage({ user, project: p, assets, stats, origin, saved, recent, direct }) {
+function projectPage({ user, project: p, assets, stats, origin, saved, recent, direct, storageMissing }) {
   const link = `${origin}/d/${p.share_token}`;
   return layout({ title: p.title, user, recent, scripts: ['/static/spiral.js', '/static/upload.js'], body: `
 <main class="wrap">
@@ -344,7 +344,8 @@ function projectPage({ user, project: p, assets, stats, origin, saved, recent, d
       <div class="drop-body">
         <input type="file" id="file-input" multiple hidden>
         <p><b>Drop files here</b> or <button class="link" type="button" onclick="document.getElementById('file-input').click()">browse</button></p>
-        <p class="muted small">Photos, videos, audio, or any final files</p>
+        <p class="muted small">Photos, videos, audio, or any final files${direct ? ' · sent straight to cloud storage' : ''}</p>
+        ${storageMissing ? `<p class="q-error">Cloud storage is off because ${esc(storageMissing.join(', '))} ${storageMissing.length === 1 ? 'is' : 'are'} not set in the server's variables.</p>` : ''}
         <div class="uploading" id="uploading" hidden>${SYMBOL('anim-loader')}<span id="uploading-text">Uploading</span></div>
         <div id="queue"></div>
       </div>
