@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { PLANS } = require('./plans');
 // Inline brand logo so the wordmark and three squares follow the header colour; the red square and dot stay brand red.
 const LOGO = fs.readFileSync(path.join(__dirname, '..', 'public', 'brand', 'contentflows-logo-color.svg'), 'utf8')
   .replace(/<title>.*?<\/title>/, '')
@@ -55,7 +56,7 @@ function amNav({ base = '', theme = 'dark' } = {}) {
       <button class="am-link" id="am-product" type="button" aria-expanded="false" aria-controls="am-drop">Product</button>
       <a class="am-link" href="${base}#how">How it works</a>
       <a class="am-link" href="${base}#try">Try it</a>
-      <a class="am-link" href="/pricing">Pricing</a>
+      <a class="am-link" href="${base ? '/pricing' : '#pricing'}">Pricing</a>
       <span class="am-dot" id="am-dot" aria-hidden="true"></span>
       <div class="am-drop" id="am-drop">
         <div class="am-card">
@@ -74,7 +75,7 @@ function amNav({ base = '', theme = 'dark' } = {}) {
     </div>
   </div>
   <div class="am-mobile" id="am-mobile" aria-hidden="true">
-    <nav class="am-m-links">${rows.map((r) => `<a href="${r.href}">${r.label}</a>`).join('')}<a href="${base}#how">How it works</a><a href="${base}#try">Try it</a><a href="/pricing">Pricing</a></nav>
+    <nav class="am-m-links">${rows.map((r) => `<a href="${r.href}">${r.label}</a>`).join('')}<a href="${base}#how">How it works</a><a href="${base}#try">Try it</a><a href="${base ? '/pricing' : '#pricing'}">Pricing</a></nav>
     <div class="am-m-foot"><a class="am-m-login" href="/login">Log in</a><a class="fs-cta" href="/signup">Start delivering</a></div>
   </div>
 </header>`;
@@ -129,6 +130,49 @@ ${body}
 ${header ? `<script src="${asset('/static/am-nav.js')}"></script>` : ''}
 ${scripts.map((s) => `<script src="${asset(s)}"></script>`).join('')}
 </body></html>`;
+}
+
+// Home page pricing: the case for Pro and Studio, with Free as the way in. Each square in a
+// card's picture is 10 GB, the whole Free plan, so the two plans read as 25 and 100 of them.
+function homePricing() {
+  const { free } = PLANS;
+  // Sizes as people read them on the page: 1 TB is 1,000 GB, so Studio is 100 squares, not 102.
+  const decimalGB = (b) => (b % 1024 ** 4 === 0 ? (b / 1024 ** 4) * 1000 : b / 1024 ** 3);
+  const card = (p, cta) => {
+    const n = Math.round(decimalGB(p.limit) / decimalGB(free.limit));
+    const squares = Array.from({ length: n }, (_, i) => `<i style="--i:${i}"></i>`).join('');
+    return `
+      <article class="pcard reveal${p.id === 'pro' ? ' featured' : ''}">
+        <div class="pc-vis" aria-hidden="true">
+          <div class="pc-cap"><span>${n}× Free</span><span class="pc-key"><i></i>10 GB</span></div>
+          <div class="pc-grid">${squares}</div>
+        </div>
+        <div class="pc-body">
+          <h3>${p.name}</h3>
+          <p class="pc-line">${esc(p.line)}</p>
+          <p class="pc-space"><b>${planSize(p.limit)}</b><span>of storage</span></p>
+          <p class="pc-price"><span><b>${dollars(p.month)}</b> / month</span><small>or ${dollars(p.year)} a year, 2 months free</small></p>
+          <a class="fs-cta pc-cta${cta}" href="/signup?plan=${p.id}">Start with ${p.name}</a>
+        </div>
+      </article>`;
+  };
+  return `<section class="lp lp-dark" data-header-theme="light" id="pricing">
+  <div class="lp-inner price-split">
+    <div class="price-copy reveal">
+      <p class="lp-label">(04) Pricing</p>
+      <h2 class="lp-heading">Start free. Upgrade when your work outgrows it.</h2>
+      <p class="lp-body">Every studio starts with ${planSize(free.limit)} free. Pro and Studio give you room to keep every shoot and every cut online for your clients. The plans differ only in space, so every feature comes with every plan.</p>
+      <ul class="check-list">
+        <li>Unlimited deliveries</li>
+        <li>Original quality, never compressed</li>
+        <li>Passwords, expiry dates and download stats</li>
+        <li>Change or cancel anytime</li>
+      </ul>
+      <p class="price-more">Just starting? <a href="/signup">Start free with ${planSize(free.limit)}</a>, no card needed.<br><a href="/pricing">Compare every plan</a></p>
+    </div>
+    <div class="price-cards">${card(PLANS.pro, '')}${card(PLANS.studio, ' light')}</div>
+  </div>
+</section>`;
 }
 
 function landing() {
@@ -243,35 +287,42 @@ function landing() {
   </div>
 </section>
 
+${homePricing()}
+
 <section class="arch" aria-hidden="true"><div class="arch-layer"><img src="/static/arch.jpg" alt="" decoding="async"></div></section>
 <footer class="end" data-header-theme="light">
   <div class="end-inner">
-    <p class="lp-label">(04) Start delivering</p>
+    <p class="lp-label">(05) Start delivering</p>
     <h2 class="end-title">Deliver your next project<br><span>the way it deserves.</span></h2>
     <p class="end-sub">Create your studio in under a minute. Send your first delivery today.</p>
     <a class="fs-cta" href="/signup">Start delivering</a>
     <div class="end-rule"></div>
-    <nav class="end-links" aria-label="Footer"><a href="/signup">Sign up</a><a href="/login">Log in</a><a href="#why">Why us</a><a href="#how">How it works</a></nav>
+    <nav class="end-links" aria-label="Footer"><a href="/signup">Sign up</a><a href="/login">Log in</a><a href="#why">Why us</a><a href="#how">How it works</a><a href="#pricing">Pricing</a></nav>
   </div>
   <div class="end-foot"><a class="foot-logo" href="/" aria-label="ContentFlows home">${LOGO}</a><span class="fs-mono">Final work delivery for creatives</span></div>
 </footer>` });
 }
 
-function authForm({ mode, error, values = {} }) {
+// plan: a paid plan picked on the home page. It rides along through sign up or log in, then
+// the creator lands on the plans page to choose monthly or yearly.
+function authForm({ mode, error, values = {}, plan }) {
   const signup = mode === 'signup';
+  const picked = PLANS[plan] && plan !== 'free' ? PLANS[plan] : null;
+  const q = picked ? `?plan=${picked.id}` : '';
   return layout({ title: signup ? 'Sign up' : 'Log in', bodyClass: 'auth', body: `
 <main class="auth-card">
   <a class="brand" href="/" aria-label="ContentFlows home">${LOGO}</a>
   <h1>${signup ? 'Create your studio' : 'Welcome back'}</h1>
+  ${picked ? `<p class="muted">${signup ? 'Next' : 'After you log in'}, choose monthly or yearly billing for ${picked.name}.</p>` : ''}
   ${error ? `<p class="error">${esc(error)}</p>` : ''}
-  <form method="post" action="/${mode}">
+  <form method="post" action="/${mode}">${picked ? `<input type="hidden" name="plan" value="${picked.id}">` : ''}
     ${signup ? `<label>Your name<input name="name" required value="${esc(values.name)}"></label>
     <label>Studio name <span class="muted">(shown to clients)</span><input name="studio" value="${esc(values.studio)}"></label>` : ''}
     <label>Email<input type="email" name="email" required value="${esc(values.email)}"></label>
     <label>Password<input type="password" name="password" required minlength="${signup ? 8 : 1}"></label>
     <button class="btn block">${signup ? 'Create account' : 'Log in'}</button>
   </form>
-  <p class="muted center">${signup ? 'Already have an account? <a href="/login">Log in</a>' : 'New here? <a href="/signup">Create an account</a>'}</p>
+  <p class="muted center">${signup ? `Already have an account? <a href="/login${q}">Log in</a>` : `New here? <a href="/signup${q}">Create an account</a>`}</p>
 </main>` });
 }
 
@@ -428,7 +479,7 @@ function pricingPage({ user, usage, plans, billingOn, subscribed, notice = {} })
   }
 
   const card = (p) => `
-    <article class="plan${p.id === cur ? ' current' : ''}${p.id === 'pro' ? ' featured' : ''}">
+    <article class="plan${p.id === cur ? ' current' : ''}${p.id === (picked ? picked.id : 'pro') ? ' featured' : ''}">
       <div class="plan-top"><h2>${p.name}</h2>${p.id === cur ? '<span class="tag">Your plan</span>' : ''}</div>
       <p class="muted small plan-line">${esc(p.line)}</p>
       <p class="plan-space"><b>${planSize(p.limit)}</b> of storage</p>
@@ -437,6 +488,8 @@ function pricingPage({ user, usage, plans, billingOn, subscribed, notice = {} })
     </article>`;
 
   const messages = [];
+  const picked = user && billingOn && !subscribed && ['pro', 'studio'].includes(notice.plan) ? plans[notice.plan] : null;
+  if (picked) messages.push(`Choose monthly or yearly below to start ${picked.name}.`);
   if (user && notice.welcome) messages.push(subscribed ? `You're on ${curName} now. Your new space is ready.` : 'Thanks! Your payment is being confirmed. Refresh in a moment to see your new plan.');
   if (user && notice.changed && subscribed) messages.push(`Your plan is now ${curName}, billed ${curIv === 'year' ? 'yearly' : 'monthly'}.`);
   if (user && notice.canceled && ending) messages.push(`Your ${curName} plan ends on ${ends}. You keep its space until then.`);

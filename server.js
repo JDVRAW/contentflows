@@ -80,31 +80,36 @@ function startSession(res, userId) {
 }
 
 app.get('/', (req, res) => (req.user ? res.redirect('/dashboard') : res.send(V.landing())));
-app.get('/signup', (req, res) => res.send(V.authForm({ mode: 'signup' })));
-app.get('/login', (req, res) => res.send(V.authForm({ mode: 'login' })));
+// A plan picked on the home page (?plan=pro) is carried through sign up or log in to the plans page.
+const pickedPlan = (v) => (PAID.includes(v) ? v : undefined);
+const afterAuth = (plan) => (plan ? `/pricing?plan=${plan}` : '/dashboard');
+app.get('/signup', (req, res) => res.send(V.authForm({ mode: 'signup', plan: pickedPlan(req.query.plan) })));
+app.get('/login', (req, res) => res.send(V.authForm({ mode: 'login', plan: pickedPlan(req.query.plan) })));
 
 app.post('/signup', (req, res) => {
   const { name = '', studio = '', email = '', password = '' } = req.body;
   const values = { name, studio, email };
+  const plan = pickedPlan(req.body.plan);
   if (!name.trim() || !email.trim() || password.length < 8)
-    return res.status(400).send(V.authForm({ mode: 'signup', error: 'Name, email and an 8+ character password are required.', values }));
+    return res.status(400).send(V.authForm({ mode: 'signup', error: 'Name, email and an 8+ character password are required.', values, plan }));
   try {
     const r = db.prepare('INSERT INTO users (email, name, studio, password_hash) VALUES (?, ?, ?, ?)')
       .run(email.trim().toLowerCase(), name.trim(), studio.trim() || null, bcrypt.hashSync(password, 10));
     startSession(res, r.lastInsertRowid);
-    res.redirect('/dashboard');
+    res.redirect(afterAuth(plan));
   } catch (e) {
-    res.status(400).send(V.authForm({ mode: 'signup', error: 'An account with that email already exists.', values }));
+    res.status(400).send(V.authForm({ mode: 'signup', error: 'An account with that email already exists.', values, plan }));
   }
 });
 
 app.post('/login', (req, res) => {
   const { email = '', password = '' } = req.body;
   const u = db.prepare('SELECT * FROM users WHERE email = ?').get(email.trim().toLowerCase());
+  const plan = pickedPlan(req.body.plan);
   if (!u || !bcrypt.compareSync(password, u.password_hash))
-    return res.status(401).send(V.authForm({ mode: 'login', error: 'Wrong email or password.', values: { email } }));
+    return res.status(401).send(V.authForm({ mode: 'login', error: 'Wrong email or password.', values: { email }, plan }));
   startSession(res, u.id);
-  res.redirect('/dashboard');
+  res.redirect(afterAuth(plan));
 });
 
 app.post('/logout', (req, res) => {
