@@ -214,11 +214,7 @@ app.get('/projects/:id', requireUser, ownProject, (req, res) => {
   const stats = db.prepare(`SELECT
       SUM(type = 'view') AS views, SUM(type IN ('download', 'zip')) AS downloads, MAX(created_at) AS last
     FROM events WHERE project_id = ?`).get(p.id);
-  const recent = db.prepare(`SELECT p.id, p.title, p.share_token,
-      COALESCE((SELECT a.id FROM assets a WHERE a.id = p.cover_asset_id AND a.thumb_name IS NOT NULL),
-        (SELECT a.id FROM assets a WHERE a.project_id = p.id AND a.thumb_name IS NOT NULL ORDER BY a.position, a.id LIMIT 1)) AS cover_id
-    FROM projects p WHERE p.user_id = ? ORDER BY p.created_at DESC, p.id DESC LIMIT 3`).all(req.user.id);
-  res.send(V.projectPage({ user: req.user, project: p, assets, saved: req.query.saved, recent,
+  res.send(V.projectPage({ user: req.user, project: p, assets, saved: req.query.saved,
     stats: { views: stats.views || 0, downloads: stats.downloads || 0, last: stats.last },
     origin: originOf(req), direct: storage.enabled, storageMissing: storage.partlySet, usage: usage(req.user) }));
 });
