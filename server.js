@@ -6,6 +6,7 @@ const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const { ZipArchive } = require('archiver');
+const { pipeline } = require('stream');
 const { db, DATA_DIR } = require('./src/db');
 const { kindOf, makeThumb } = require('./src/media');
 const storage = require('./src/storage');
@@ -242,6 +243,52 @@ app.post('/projects/:id/upload', requireUser, ownProject, upload.array('files'),
   res.json({ ok: true, files: out });
 });
 
+// ---------- thumbnails for files in object storage ----------
+// ffmpeg reads the file through this loopback-only relay, which fetches just the byte ranges it asks
+// for from the bucket with the same client the rest of the app uses. That way ffmpeg never makes
+// its own TLS or DNS connections, and only the frames it needs are downloaded.
+const relays = new Map();
+app.get('/_relay/:t', async (req, res) => {
+  const r = relays.get(req.params.t);
+  const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+  if (!local || !r) return res.sendStatus(404);
+  try {
+    const o = await storage.getRange(r.key, req.headers.range);
+    res.status(o.ContentRange ? 206 : 200).set({
+      'Accept-Ranges': 'bytes', 'Content-Length': String(o.ContentLength),
+      'Content-Type': o.ContentType || 'application/octet-stream', ...(o.ContentRange ? { 'Content-Range': o.ContentRange } : {}),
+    });
+    pipeline(o.Body, res, () => {}); // stops the download from the bucket when ffmpeg hangs up
+  } catch (e) {
+    if (e.name === 'InvalidRange') return res.sendStatus(416);
+    console.error('relay', r.key, e.name, e.message);
+    res.sendStatus(502);
+  }
+});
+
+async function thumbFromStorage(key, kind, id) {
+  if (kind !== 'image' && kind !== 'video') return null;
+  const t = token(18);
+  relays.set(t, { key });
+  try {
+    const thumb = await makeThumb(`http://127.0.0.1:${PORT}/_relay/${t}`, kind, id);
+    if (thumb) db.prepare('UPDATE assets SET thumb_name = ? WHERE id = ?').run(thumb, id);
+    return thumb;
+  } finally { relays.delete(t); }
+}
+
+// Photos and videos in the bucket that have no thumbnail yet (an earlier attempt failed) get another
+// try after each start, one at a time.
+async function backfillThumbs() {
+  if (!storage.enabled) return;
+  const missing = db.prepare(`SELECT id, stored_name, kind FROM assets
+    WHERE storage = 's3' AND thumb_name IS NULL AND kind IN ('image', 'video') ORDER BY id DESC LIMIT 50`).all();
+  for (const a of missing) {
+    const ok = await thumbFromStorage(a.stored_name, a.kind, a.id).catch((e) => console.error('backfill', a.id, e.message));
+    console.log(`thumbnail for asset ${a.id}: ${ok ? 'made' : 'failed'}`);
+  }
+}
+
 // ---------- creator: direct uploads to object storage (R2) ----------
 // The browser asks for signed part URLs, PUTs the file's parts straight to the bucket, then
 // reports the parts back here. File bytes never pass through this server.
@@ -288,9 +335,7 @@ app.post('/projects/:id/uploads/complete', ...direct, async (req, res) => {
   const size = await storage.completeUpload(f.key, f.uploadId, parts);
   const kind = kindOf(type || '', name);
   const r = insertAsset.run(req.project.id, name, f.key, type, size, kind, 's3', req.project.id);
-  // ffmpeg reads just enough of the file from the bucket to make the thumbnail.
-  const thumb = await makeThumb(await storage.signedGet(f.key, { expiresIn: 600 }), kind, r.lastInsertRowid);
-  if (thumb) db.prepare('UPDATE assets SET thumb_name = ? WHERE id = ?').run(thumb, r.lastInsertRowid);
+  await thumbFromStorage(f.key, kind, r.lastInsertRowid);
   res.json({ ok: true, files: [{ id: r.lastInsertRowid, name, kind, size }] });
 });
 
@@ -445,6 +490,9 @@ app.use((err, req, res, next) => {
 if (require.main === module) {
   try { sweepUnfinishedUploads(); } catch (e) { console.error('cleanup failed', e); }
   console.log(`Files are stored in ${storage.enabled ? `object storage, ${storage.describe}` : storage.describe}`);
-  app.listen(PORT, () => console.log(`ContentFlows running on http://localhost:${PORT}`));
+  app.listen(PORT, () => {
+    console.log(`ContentFlows running on http://localhost:${PORT}`);
+    setTimeout(() => backfillThumbs().catch((e) => console.error('backfill', e)), 2000);
+  });
 }
 module.exports = app;
