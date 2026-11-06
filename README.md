@@ -11,6 +11,7 @@ A delivery platform for creatives. Upload final photoshoots, music videos, comme
 - **Client delivery page**: cinematic cover, a large-type note from the studio with files, size and expiry at a glance, a gallery laid out like the "One link" scene on the home page (a sand board with a copyable link pill, a Photos/Films switch, and an even grid of rounded tiles where the first tile widens so every row is full), hover download and film previews, pick several files and download just those as one zip, a full-screen viewer with keyboard and swipe navigation, a files list with built-in audio players, and a closing Download all
 - **Downloads**: single files, a picked selection (`/d/:token/zip?ids=1,2,3`), or "Download all" as a zip
 - **Link controls**: optional password, expiry date, downloads on/off, regenerate link to revoke the old one
+- **Security**: delivery links carry a random 128-bit code; passwords are stored as bcrypt hashes; after 10 wrong passwords from one address, or 30 in total, a delivery or account refuses more tries for 15 minutes. Files in R2 are served through signed links that expire after 6 hours. Only photos, video and audio open in the browser; any other file downloads, and files on the server's disk are sent with a `sandbox` policy, so an uploaded HTML or SVG file can't run as a page
 - **Tracking**: views and downloads per delivery and per file
 - **Storage plans**: Free (10 GB), Pro ($12/month, 250 GB) and Studio ($29/month, 1 TB), yearly at 10× the monthly price. The limit is the total size of the files a creator keeps, shown as a meter on the dashboard and checked before each upload. Upgrades, plan changes and cancellations go through Stripe
 
@@ -100,6 +101,8 @@ Big files should not pass through the app server: Railway's proxy and a small vo
 4. In Railway → **Variables**, add `S3_ENDPOINT` (the S3 API address from the bucket's settings), `S3_BUCKET`, `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`. Railway redeploys on its own.
 
 If something is off, the upload row says what: a wrong bucket name, a missing `ETag` in the CORS policy, or a token without access.
+
+Keep the bucket's **Public access** (public development URL and custom domains) turned off. Clients only ever reach files through signed links the app creates after checking the delivery's password and expiry.
 
 ### Stripe for paid plans
 

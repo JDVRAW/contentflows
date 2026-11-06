@@ -77,4 +77,4 @@ const remove = (Key) => client.send(new DeleteObjectCommand({ Bucket, Key })).ca
 // Some S3 variables set but not all: almost always a setup slip worth pointing out.
 const partlySet = missing.length > 0 && missing.length < REQUIRED.length ? missing : null;
 
-module.exports = { enabled, describe, partlySet, partSizeFor, startUpload, signParts, completeUpload, abortUpload, signedGet, getRange, getStream, remove };
+module.exports = { enabled, describe, partlySet, partSizeFor, startUpload, signParts, completeUpload, abortUpload, signedGet, getRange, getStream, remove, disposition };
