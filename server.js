@@ -47,7 +47,11 @@ app.use((req, res, next) => {
   }
   next();
 });
-const requireUser = (req, res, next) => (req.user ? next() : res.redirect('/login'));
+const requireUser = (req, res, next) => {
+  if (req.user) return next();
+  if (req.xhr) return res.status(401).json({ ok: false, error: 'You were logged out. Log in again and retry.' });
+  res.redirect('/login');
+};
 
 function startSession(res, userId) {
   const t = token();
@@ -296,8 +300,20 @@ app.get('/d/:token/zip', loadDelivery, requireUnlocked, (req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  console.error(err);
-  if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ ok: false, error: 'File too large' });
+  console.error(req.method, req.originalUrl, err);
+  if (req.xhr) {
+    // Upload errors go back as JSON so the uploader can show the reason on the file's row.
+    const known = {
+      LIMIT_FILE_SIZE: [413, `This file is over the ${MAX_UPLOAD >= 1024 ** 3 ? `${+(MAX_UPLOAD / 1024 ** 3).toFixed(1)} GB` : `${Math.round(MAX_UPLOAD / 1024 ** 2)} MB`} limit.`],
+      ENOSPC: [507, 'The server is out of storage space. Make the volume bigger in Railway.'],
+      EDQUOT: [507, 'The server is out of storage space. Make the volume bigger in Railway.'],
+      EACCES: [500, "The server can't write to its storage folder."],
+      EROFS: [500, "The server's storage folder is read-only."],
+    }[err.code];
+    const [status, error] = known || [500, `Server error: ${err.message || err.code || 'unknown'}`];
+    if (!res.headersSent) return res.status(status).json({ ok: false, error });
+    return;
+  }
   res.status(500).send(V.messagePage('Something went wrong', 'Please try again.'));
 });
 

@@ -25,11 +25,28 @@
     return new Promise((resolve) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', `/projects/${pid}/upload`);
+      xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+      xhr.responseType = 'json';
       xhr.upload.onprogress = (e) => { if (e.lengthComputable) bar.style.width = (e.loaded / e.total) * 100 + '%'; };
       xhr.onloadend = () => {
-        const ok = xhr.status === 200;
+        const body = xhr.response;
+        const ok = xhr.status === 200 && body && body.ok && body.files && body.files.length > 0;
         row.classList.add(ok ? 'done' : 'failed');
-        if (!ok) row.querySelector('.q-size').textContent = 'Upload failed';
+        if (!ok) {
+          const why = (body && body.error) || ({
+            0: 'Connection lost before the upload finished. Check your internet and try again.',
+            401: 'You were logged out. Log in again and retry.',
+            413: 'This file is too large for the server.',
+            502: 'The server stopped responding. Try again, or upload fewer files at once.',
+            503: 'The server is restarting. Try again in a minute.',
+            504: 'The server took too long to answer. Try again, or upload fewer files at once.',
+          })[xhr.status] || `Upload failed (error ${xhr.status}).`;
+          row.querySelector('.q-size').textContent = 'Failed';
+          const msg = document.createElement('p');
+          msg.className = 'q-error';
+          msg.textContent = why;
+          row.appendChild(msg);
+        }
         resolve(ok);
       };
       xhr.send(fd);
@@ -47,9 +64,22 @@
     if (spiral) list.slice(0, 40).forEach((f, i) => setTimeout(() => spiral.add(f), i * 140));
     const tick = () => { label.textContent = done < total ? `Uploading ${done + 1 > total ? total : done + 1} of ${total}` : 'Finishing up'; };
     if (busy) { busy.hidden = false; tick(); }
-    const sendOne = async (f) => { await send(f); done++; if (busy) tick(); };
+    let failed = 0;
+    const sendOne = async (f) => { if (!(await send(f))) failed++; done++; if (busy) tick(); };
     const worker = async () => { while (list.length) await sendOne(list.shift()); };
     await Promise.all([worker(), worker(), worker()]);
+    if (failed) {
+      // Keep the page as it is so the reason stays visible on each failed row.
+      if (busy) busy.hidden = true;
+      const note = document.createElement('p');
+      note.className = 'q-summary';
+      note.innerHTML = `<span></span> <a href="">Refresh the page</a> to see what was saved.`;
+      note.querySelector('span').textContent = failed === total
+        ? `None of the ${total} file${total === 1 ? '' : 's'} uploaded.`
+        : `${total - failed} of ${total} files uploaded, ${failed} failed.`;
+      queue.prepend(note);
+      return;
+    }
     // Let the file cubes finish flying in before the page refreshes with the new files.
     setTimeout(() => location.reload(), Math.max(600, (spiral ? 2900 + Math.min(total, 40) * 140 : 0) - (Date.now() - started)));
   }
