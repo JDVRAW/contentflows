@@ -70,7 +70,9 @@ if (!db.prepare('PRAGMA table_info(assets)').all().some((c) => c.name === 'stora
 const userCols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
 for (const [name, type] of [['plan', "TEXT NOT NULL DEFAULT 'free'"], ['plan_interval', 'TEXT'], ['plan_status', 'TEXT'],
   ['plan_period_end', 'INTEGER'], ['plan_cancel_at_end', 'INTEGER NOT NULL DEFAULT 0'],
-  ['stripe_customer_id', 'TEXT'], ['stripe_subscription_id', 'TEXT']]) {
+  ['stripe_customer_id', 'TEXT'], ['stripe_subscription_id', 'TEXT'],
+  // 'test' or 'live': which kind of Stripe key the saved customer and subscription belong to.
+  ['stripe_mode', 'TEXT']]) {
   if (!userCols.has(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
 }
 
