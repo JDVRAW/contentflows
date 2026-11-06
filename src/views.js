@@ -125,6 +125,10 @@ function creatorNav(user, recent = []) {
   };
 }
 
+// Version tag on CSS/JS links so browsers fetch fresh files after every deploy instead of a cached copy.
+const ASSET_V = (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 8) || Date.now().toString(36);
+const asset = (u) => `${u}?v=${ASSET_V}`;
+
 function layout({ title, body, user, nav, header, recent, bodyClass = '', scripts = [] }) {
   if (!nav && user) nav = creatorNav(user, recent);
   return `<!doctype html>
@@ -138,12 +142,12 @@ function layout({ title, body, user, nav, header, recent, bodyClass = '', script
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#111113">
-<link rel="stylesheet" href="/static/styles.css">
+<link rel="stylesheet" href="${asset('/static/styles.css')}">
 </head><body class="${bodyClass}${nav || header ? ' has-nav' : ''}">
 ${header || siteNav(nav)}
 ${body}
-${header ? '<script src="/static/am-nav.js"></script>' : nav ? '<script src="/static/nav.js"></script>' : ''}
-${scripts.map((s) => `<script src="${s}"></script>`).join('')}
+${header ? `<script src="${asset('/static/am-nav.js')}"></script>` : nav ? `<script src="${asset('/static/nav.js')}"></script>` : ''}
+${scripts.map((s) => `<script src="${asset(s)}"></script>`).join('')}
 </body></html>`;
 }
 
