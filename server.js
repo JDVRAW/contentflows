@@ -145,7 +145,7 @@ app.get('/projects/:id', requireUser, ownProject, (req, res) => {
     FROM projects p WHERE p.user_id = ? ORDER BY p.created_at DESC, p.id DESC LIMIT 3`).all(req.user.id);
   res.send(V.projectPage({ user: req.user, project: p, assets, saved: req.query.saved, recent,
     stats: { views: stats.views || 0, downloads: stats.downloads || 0, last: stats.last },
-    origin: process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`, direct: storage.enabled }));
+    origin: process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`, direct: storage.enabled, storageMissing: storage.partlySet }));
 });
 
 app.post('/projects/:id/settings', requireUser, ownProject, (req, res) => {
@@ -202,6 +202,28 @@ const upload = multer({
   }),
   limits: { fileSize: MAX_UPLOAD },
 });
+
+// Uploads cut off by a restart (a redeploy, a crash) leave files that no asset points to.
+// Nothing is uploading while the server starts, so any such file is safe to remove then.
+function sweepUnfinishedUploads() {
+  const kept = new Set(db.prepare("SELECT project_id || '/' || stored_name AS k FROM assets WHERE storage IS NULL").all().map((r) => r.k));
+  let count = 0, bytes = 0;
+  for (const dir of fs.readdirSync(UPLOADS)) {
+    let names;
+    try { names = fs.readdirSync(path.join(UPLOADS, dir)); } catch (e) { continue; }
+    for (const n of names) {
+      if (kept.has(`${dir}/${n}`)) continue;
+      const f = path.join(UPLOADS, dir, n);
+      try {
+        const st = fs.statSync(f);
+        if (!st.isFile()) continue;
+        fs.rmSync(f);
+        count++; bytes += st.size;
+      } catch (e) { console.error('cleanup', f, e.message); }
+    }
+  }
+  if (count) console.log(`Removed ${count} unfinished upload${count === 1 ? '' : 's'} (${(bytes / 1024 ** 3).toFixed(2)} GB)`);
+}
 
 const insertAsset = db.prepare(`INSERT INTO assets (project_id, original_name, stored_name, mime, size, kind, storage, position)
   VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM assets WHERE project_id = ?))`);
@@ -420,5 +442,9 @@ app.use((err, req, res, next) => {
   res.status(500).send(V.messagePage('Something went wrong', 'Please try again.'));
 });
 
-if (require.main === module) app.listen(PORT, () => console.log(`ContentFlows running on http://localhost:${PORT}`));
+if (require.main === module) {
+  try { sweepUnfinishedUploads(); } catch (e) { console.error('cleanup failed', e); }
+  console.log(`Files are stored in ${storage.enabled ? `object storage, ${storage.describe}` : storage.describe}`);
+  app.listen(PORT, () => console.log(`ContentFlows running on http://localhost:${PORT}`));
+}
 module.exports = app;
