@@ -64,6 +64,9 @@ function signedGet(Key, { name, contentType, attachment = false, expiresIn = 6 *
   }), { expiresIn });
 }
 
+// One byte range of an object (for the local relay ffmpeg reads thumbnails through).
+const getRange = (Key, Range) => client.send(new GetObjectCommand({ Bucket, Key, Range: Range || undefined }));
+
 async function getStream(Key) {
   const r = await client.send(new GetObjectCommand({ Bucket, Key }));
   return r.Body;
@@ -74,4 +77,4 @@ const remove = (Key) => client.send(new DeleteObjectCommand({ Bucket, Key })).ca
 // Some S3 variables set but not all: almost always a setup slip worth pointing out.
 const partlySet = missing.length > 0 && missing.length < REQUIRED.length ? missing : null;
 
-module.exports = { enabled, describe, partlySet, partSizeFor, startUpload, signParts, completeUpload, abortUpload, signedGet, getStream, remove };
+module.exports = { enabled, describe, partlySet, partSizeFor, startUpload, signParts, completeUpload, abortUpload, signedGet, getRange, getStream, remove };

@@ -14,9 +14,12 @@ function kindOf(mime = '', name = '') {
   return 'file';
 }
 
+// Why ffmpeg failed, in one line for the logs.
+const reason = (err, stderr) => (String(stderr || '').trim().split('\n').pop() || (err.killed ? 'timed out' : err.message)).slice(0, 300);
+
 // Generate a JPEG thumbnail (images) or poster frame (videos) with ffmpeg.
-// srcPath is a local file or a signed https URL (ffmpeg reads only the bytes it needs from it).
-// Resolves to the thumb filename, or null if ffmpeg is missing or fails.
+// srcPath is a local file or an http URL (ffmpeg reads only the bytes it needs from it).
+// Resolves to the thumb filename, or null if ffmpeg is missing or fails (the reason is logged).
 function makeThumb(srcPath, kind, id) {
   if (kind !== 'image' && kind !== 'video') return Promise.resolve(null);
   const out = `${id}.jpg`;
@@ -24,15 +27,19 @@ function makeThumb(srcPath, kind, id) {
   const args = ['-y', '-loglevel', 'error'];
   if (kind === 'video') args.push('-ss', '1');
   args.push('-i', srcPath, '-frames:v', '1', '-vf', "scale='min(1200,iw)':-2", '-q:v', '4', outPath);
+  const opts = { timeout: /^https?:/.test(srcPath) ? 120000 : 60000 };
+  const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
   return new Promise((resolve) => {
-    execFile(process.env.FFMPEG_PATH || 'ffmpeg', args, { timeout: 60000 }, (err) => {
+    execFile(ffmpeg, args, opts, (err, so, stderr) => {
       if (!err && fs.existsSync(outPath)) return resolve(out);
-      if (kind === 'video') {
-        // Very short clips: retry from the first frame.
-        const retry = args.filter((a, i) => !(a === '-ss' || args[i - 1] === '-ss'));
-        execFile(process.env.FFMPEG_PATH || 'ffmpeg', retry, { timeout: 60000 }, (e2) =>
-          resolve(!e2 && fs.existsSync(outPath) ? out : null));
-      } else resolve(null);
+      if (kind !== 'video') { console.error(`thumbnail failed for asset ${id}: ${reason(err || {}, stderr)}`); return resolve(null); }
+      // Very short clips: retry from the first frame.
+      const retry = args.filter((a, i) => !(a === '-ss' || args[i - 1] === '-ss'));
+      execFile(ffmpeg, retry, opts, (e2, so2, stderr2) => {
+        if (!e2 && fs.existsSync(outPath)) return resolve(out);
+        console.error(`thumbnail failed for asset ${id}: ${reason(e2 || {}, stderr2 || stderr)}`);
+        resolve(null);
+      });
     });
   });
 }

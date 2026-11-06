@@ -360,7 +360,7 @@ function projectPage({ user, project: p, assets, stats, origin, saved, recent, d
         ${a.kind === 'video' ? '<span class="badge">▶ Video</span>' : ''}${p.cover_asset_id === a.id ? '<span class="badge left">Cover</span>' : ''}</div>
         <div class="asset-meta"><span title="${esc(a.original_name)}">${esc(a.original_name)}</span><span class="muted small">${fmtSize(a.size)} · ${a.downloads} dl</span></div>
         <div class="asset-actions">
-          ${a.thumb_name ? `<form method="post" action="/projects/${p.id}/cover/${a.id}"><button class="link small">Set cover</button></form>` : ''}
+          ${a.thumb_name || a.kind === 'video' ? `<form method="post" action="/projects/${p.id}/cover/${a.id}"><button class="link small">Set cover</button></form>` : ''}
           <form method="post" action="/projects/${p.id}/assets/${a.id}/delete" onsubmit="return confirm('Delete this file?')"><button class="link small danger">Delete</button></form>
         </div>
       </div>`).join('')}</div>` : '<p class="muted">No files uploaded yet.</p>'}
@@ -428,7 +428,9 @@ function deliveryHeader({ studio, links, cta }) {
 function deliveryPage({ project: p, assets, studio, host = '' }) {
   const base = `/d/${p.share_token}`;
   const canDl = !!p.allow_download && assets.length > 0;
-  const cover = assets.find((a) => a.id === p.cover_asset_id && a.thumb_name) || assets.find((a) => a.thumb_name);
+  // A video can be the cover even before it has a poster frame: the hero just plays it.
+  const usable = (a) => a.thumb_name || a.kind === 'video';
+  const cover = assets.find((a) => a.id === p.cover_asset_id && usable(a)) || assets.find((a) => a.thumb_name) || assets.find(usable);
   const visual = assets.filter((a) => a.kind === 'image' || a.kind === 'video');
   const photos = visual.filter((a) => a.kind === 'image').length;
   const films = visual.length - photos;
@@ -447,7 +449,7 @@ function deliveryPage({ project: p, assets, studio, host = '' }) {
     header: deliveryHeader({ studio, links, cta: canDl ? { href: `${base}/zip`, label: `Download all` } : null }), body: `
 <section class="fs-hero dl-hero" id="top" data-header-theme="light">
   ${cover ? (cover.kind === 'video'
-    ? `<video class="fs-media" src="${base}/media/${cover.id}" poster="${base}/thumb/${cover.id}" autoplay muted loop playsinline preload="metadata"></video>`
+    ? `<video class="fs-media" src="${base}/media/${cover.id}"${cover.thumb_name ? ` poster="${base}/thumb/${cover.id}"` : ''} autoplay muted loop playsinline preload="metadata"></video>`
     : `<img class="fs-media" src="${base}/media/${cover.id}" alt="">`) : ''}
   <h1 class="fs-title">${esc(p.title)}${p.client_name ? `<br><span>for ${esc(p.client_name)}.</span>` : ''}</h1>
   <div class="fs-aside">
