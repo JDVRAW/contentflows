@@ -55,6 +55,36 @@ app.get('/manifest.webmanifest', (req, res) => res.type('application/manifest+js
 const token = (n = 24) => crypto.randomBytes(n).toString('base64url');
 const cookieOpts = { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' };
 
+// ---------- password guessing ----------
+// Wrong passwords are counted per address and per target (one delivery, or one account email).
+// After too many in 15 minutes, more tries are refused until the 15 minutes are up, so nobody can
+// run through guesses at speed. The per-target count also covers guesses spread over many addresses.
+const GUESS_WINDOW = 15 * 60 * 1000;
+const PER_ADDRESS = 10, PER_TARGET = 30;
+const misses = new Map(); // key -> { n, until }
+const missKeys = (req, target) => [[`${target}|${req.ip}`, PER_ADDRESS], [target, PER_TARGET]];
+// Minutes to wait before another try is allowed, or 0.
+function guessWait(req, target) {
+  const now = Date.now();
+  for (const [k, max] of missKeys(req, target)) {
+    const m = misses.get(k);
+    if (m && m.until > now && m.n >= max) return Math.ceil((m.until - now) / 60000);
+  }
+  return 0;
+}
+function countMiss(req, target) {
+  const now = Date.now();
+  for (const [k] of missKeys(req, target)) {
+    const m = misses.get(k);
+    if (m && m.until > now) m.n++;
+    // Past this many tracked addresses, keep counting per target only, so the map can't be flooded.
+    else if (k === target || misses.size < 50000) misses.set(k, { n: 1, until: now + GUESS_WINDOW });
+  }
+}
+const clearMisses = (req, target) => misses.delete(`${target}|${req.ip}`);
+const waitText = (min) => `Too many wrong passwords. Try again in ${min} minute${min === 1 ? '' : 's'}.`;
+setInterval(() => { const now = Date.now(); for (const [k, m] of misses) if (m.until <= now) misses.delete(k); }, 60 * 1000).unref();
+
 // ---------- auth ----------
 app.use((req, res, next) => {
   const t = req.signedCookies.cf_session;
@@ -100,9 +130,15 @@ app.post('/signup', (req, res) => {
 
 app.post('/login', (req, res) => {
   const { email = '', password = '' } = req.body;
+  const target = `login:${email.trim().toLowerCase()}`;
+  const wait = guessWait(req, target);
+  if (wait) return res.status(429).send(V.authForm({ mode: 'login', error: waitText(wait), values: { email } }));
   const u = db.prepare('SELECT * FROM users WHERE email = ?').get(email.trim().toLowerCase());
-  if (!u || !bcrypt.compareSync(password, u.password_hash))
+  if (!u || !bcrypt.compareSync(password, u.password_hash)) {
+    countMiss(req, target);
     return res.status(401).send(V.authForm({ mode: 'login', error: 'Wrong email or password.', values: { email } }));
+  }
+  clearMisses(req, target);
   startSession(res, u.id);
   res.redirect('/dashboard');
 });
@@ -468,11 +504,17 @@ app.get('/d/:token', loadDelivery, (req, res) => {
 
 app.post('/d/:token/unlock', loadDelivery, (req, res) => {
   const p = req.project;
+  const studio = p.owner_studio || p.owner_name;
+  const target = `delivery:${p.id}`;
+  const wait = guessWait(req, target);
+  if (wait) return res.status(429).send(V.unlockPage({ project: p, studio, error: waitText(wait) }));
   if (p.password_hash && bcrypt.compareSync(req.body.password || '', p.password_hash)) {
+    clearMisses(req, target);
     res.cookie(`cf_unlock_${p.id}`, unlockValue(p), { ...cookieOpts, signed: true, maxAge: 30 * 24 * 3600 * 1000 });
     return res.redirect(`/d/${p.share_token}`);
   }
-  res.status(401).send(V.unlockPage({ project: p, studio: p.owner_studio || p.owner_name, error: 'That password is not right.' }));
+  countMiss(req, target);
+  res.status(401).send(V.unlockPage({ project: p, studio, error: 'That password is not right.' }));
 });
 
 app.get('/d/:token/thumb/:aid', loadDelivery, requireUnlocked, (req, res) => {
@@ -481,12 +523,21 @@ app.get('/d/:token/thumb/:aid', loadDelivery, requireUnlocked, (req, res) => {
   res.sendFile(path.join(THUMBS, a.thumb_name), { maxAge: '7d' });
 });
 
+// Only photos, video and audio are shown in the browser. Anything else opened on its own (an HTML
+// page, an SVG with a script in it) downloads instead of rendering, so an uploaded file can never run
+// as a page. SVGs still show as images in the gallery: an <img> ignores the download header.
+const opensInline = (mime) => /^(image\/(?!svg)|video\/|audio\/)/i.test(mime || '');
+
 // Files in object storage are served by the bucket itself through a short-lived signed link.
 async function sendFromStorage(res, a, attachment) {
   if (!storage.enabled) return res.sendStatus(404);
   res.set('Cache-Control', 'no-store');
-  res.redirect(302, await storage.signedGet(a.stored_name, { name: a.original_name, contentType: a.mime, attachment }));
+  res.redirect(302, await storage.signedGet(a.stored_name, { name: a.original_name, contentType: a.mime, attachment: attachment || !opensInline(a.mime) }));
 }
+
+// Files on this server's disk come from the site's own address, so they also get a sandbox: even if
+// a browser did render one as a page, it couldn't run scripts or act as the signed-in creator.
+const fileHeaders = { 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': 'sandbox' };
 
 // Inline streaming (sendFile handles HTTP Range requests for video seeking).
 app.get('/d/:token/media/:aid', loadDelivery, requireUnlocked, async (req, res) => {
@@ -494,7 +545,8 @@ app.get('/d/:token/media/:aid', loadDelivery, requireUnlocked, async (req, res) 
   if (!a) return res.sendStatus(404);
   if (a.storage === 's3') return sendFromStorage(res, a, false);
   res.type(a.mime || 'application/octet-stream');
-  res.sendFile(path.join(UPLOADS, String(a.project_id), a.stored_name), { headers: { 'Content-Disposition': 'inline' } });
+  res.sendFile(path.join(UPLOADS, String(a.project_id), a.stored_name),
+    { headers: { ...fileHeaders, 'Content-Disposition': storage.disposition(opensInline(a.mime) ? 'inline' : 'attachment', a.original_name) } });
 });
 
 app.get('/d/:token/download/:aid', loadDelivery, requireUnlocked, async (req, res) => {
@@ -503,7 +555,7 @@ app.get('/d/:token/download/:aid', loadDelivery, requireUnlocked, async (req, re
   if (!a) return res.sendStatus(404);
   if (!req.headers.range) track(req, 'download', a.id);
   if (a.storage === 's3') return sendFromStorage(res, a, true);
-  res.download(path.join(UPLOADS, String(a.project_id), a.stored_name), a.original_name);
+  res.download(path.join(UPLOADS, String(a.project_id), a.stored_name), a.original_name, { headers: fileHeaders });
 });
 
 app.get('/d/:token/zip', loadDelivery, requireUnlocked, (req, res) => {
