@@ -21,7 +21,8 @@
     503: 'The server is restarting. Try again in a minute.',
     504: 'The server took too long to answer. Try again, or upload fewer files at once.',
   };
-  const fail = (message, fatal) => Object.assign(new Error(message), { fatal });
+  // upgrade: set when the file doesn't fit in the creator's storage plan, so the row can link to the plans.
+  const fail = (message, fatal, upgrade) => Object.assign(new Error(message), { fatal, upgrade });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // Classic upload: the file goes to this server in one request.
@@ -37,7 +38,7 @@
       xhr.onloadend = () => {
         const body = xhr.response;
         if (xhr.status === 200 && body && body.ok && body.files && body.files.length > 0) return resolve(body);
-        reject(fail((body && body.error) || STATUS[xhr.status] || `Upload failed (error ${xhr.status}).`));
+        reject(fail((body && body.error) || STATUS[xhr.status] || `Upload failed (error ${xhr.status}).`, false, body && body.upgrade));
       };
       xhr.send(fd);
     });
@@ -53,7 +54,7 @@
       });
     } catch (e) { throw fail(STATUS[0]); }
     try { j = await r.json(); } catch (e) {}
-    if (!r.ok || !j || !j.ok) throw fail((j && j.error) || STATUS[r.status] || `Upload failed (error ${r.status}).`, r.status < 500);
+    if (!r.ok || !j || !j.ok) throw fail((j && j.error) || STATUS[r.status] || `Upload failed (error ${r.status}).`, r.status < 500, j && j.upgrade);
     return j;
   }
 
@@ -151,6 +152,11 @@
       const msg = document.createElement('p');
       msg.className = 'q-error';
       msg.textContent = e.message;
+      if (e.upgrade) {
+        const a = document.createElement('a');
+        a.href = e.upgrade; a.textContent = 'See plans';
+        msg.append(' ', a);
+      }
       row.appendChild(msg);
       return false;
     });

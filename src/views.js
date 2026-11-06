@@ -22,6 +22,8 @@ const fmtSize = (n) => {
   do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
   return `${n.toFixed(n < 10 ? 1 : 0)} ${u[i]}`;
 };
+// Plan sizes are round numbers: "1 TB", not "1.0 TB".
+const planSize = (n) => fmtSize(n).replace(/\.0 /, ' ');
 const fmtDate = (d) => d ? new Date(d.replace(' ', 'T') + (d.length <= 10 ? '' : 'Z'))
   .toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
 
@@ -73,29 +75,32 @@ const AM_ICONS = {
   speed: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 19.5h14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><g class="ic-acc"><path d="M12 15.5V5.5m0 0-4 4m4-4 4 4" stroke="#E5402A" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></g></svg>',
   easy: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M10.5 13.5a3.5 3.5 0 0 0 5 0l3-3a3.54 3.54 0 0 0-5-5l-.75.75" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path class="ic-acc" d="M13.5 10.5a3.5 3.5 0 0 0-5 0l-3 3a3.54 3.54 0 0 0 5 5l.75-.75" stroke="#E5402A" stroke-width="1.6" stroke-linecap="round"/></svg>',
 };
-function amNav() {
+// base: '/' when the header is shown on a page other than the home page, so section links go back home.
+// theme: the header's starting text colour ('dark' text for the light home hero, 'light' on dark pages).
+function amNav({ base = '', theme = 'dark' } = {}) {
   const rows = [
-    { href: '#quality', icon: 'quality', label: 'Full quality', desc: 'Original files, never compressed' },
-    { href: '#speed', icon: 'speed', label: 'Fast uploads', desc: 'Send a whole shoot in minutes' },
-    { href: '#easy', icon: 'easy', label: 'Easy for clients', desc: 'One link, nothing to install' },
+    { href: `${base}#quality`, icon: 'quality', label: 'Full quality', desc: 'Original files, never compressed' },
+    { href: `${base}#speed`, icon: 'speed', label: 'Fast uploads', desc: 'Send a whole shoot in minutes' },
+    { href: `${base}#easy`, icon: 'easy', label: 'Easy for clients', desc: 'One link, nothing to install' },
   ];
   const row = (r) => `<a class="am-row" href="${r.href}"><span class="am-ic">${AM_ICONS[r.icon]}</span><span class="am-txt"><b>${r.label}${ARROW}</b><small>${r.desc}</small></span></a>`;
   const burger = `<svg class="am-i-open" width="16" height="12" viewBox="0 0 16 12" aria-hidden="true"><path d="M0 1h16M0 6h16M0 11h16" stroke="currentColor" stroke-width="1.4"/></svg><svg class="am-i-close" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M1 1l12 12M13 1L1 13" stroke="currentColor" stroke-width="1.4"/></svg>`;
   return `
-<header class="am" id="am-header" data-theme="dark">
+<header class="am" id="am-header" data-theme="${theme}">
   <div class="am-bar">
     <a class="am-logo header-logo is-brand" href="/" aria-label="ContentFlows home">${LOGO}</a>
     <nav class="am-links" id="am-links" aria-label="Main">
       <button class="am-link" id="am-product" type="button" aria-expanded="false" aria-controls="am-drop">Product</button>
-      <a class="am-link" href="#how">How it works</a>
-      <a class="am-link" href="#try">Try it</a>
+      <a class="am-link" href="${base}#how">How it works</a>
+      <a class="am-link" href="${base}#try">Try it</a>
+      <a class="am-link" href="/pricing">Pricing</a>
       <span class="am-dot" id="am-dot" aria-hidden="true"></span>
       <div class="am-drop" id="am-drop">
         <div class="am-card">
           <div class="am-col"><p class="am-head">Deliver</p>${rows.map(row).join('')}</div>
           <div class="am-col am-col-right"><p class="am-head">Try it</p>
-            <a class="am-try" href="#try" tabindex="-1" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><span class="am-try-core">${SYMBOL('')}<em>Drop your files</em></span></a>
-            <a class="am-row" href="#try"><span class="am-ic"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="2" stroke="currentColor" stroke-width="1.4"/><rect x="13.5" y="3.5" width="7" height="7" rx="2" stroke="currentColor" stroke-width="1.4"/><rect x="3.5" y="13.5" width="7" height="7" rx="2" stroke="currentColor" stroke-width="1.4"/><rect class="ic-acc" x="14" y="14" width="6.5" height="6.5" rx="2" fill="#E5402A"/></svg></span><span class="am-txt"><b>Drop zone${ARROW}</b><small>Drag a shoot onto the page</small></span></a>
+            <a class="am-try" href="${base}#try" tabindex="-1" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><span class="am-try-core">${SYMBOL('')}<em>Drop your files</em></span></a>
+            <a class="am-row" href="${base}#try"><span class="am-ic"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="2" stroke="currentColor" stroke-width="1.4"/><rect x="13.5" y="3.5" width="7" height="7" rx="2" stroke="currentColor" stroke-width="1.4"/><rect x="3.5" y="13.5" width="7" height="7" rx="2" stroke="currentColor" stroke-width="1.4"/><rect class="ic-acc" x="14" y="14" width="6.5" height="6.5" rx="2" fill="#E5402A"/></svg></span><span class="am-txt"><b>Drop zone${ARROW}</b><small>Drag a shoot onto the page</small></span></a>
           </div>
         </div>
       </div>
@@ -107,7 +112,7 @@ function amNav() {
     </div>
   </div>
   <div class="am-mobile" id="am-mobile" aria-hidden="true">
-    <nav class="am-m-links">${rows.map((r) => `<a href="${r.href}">${r.label}</a>`).join('')}<a href="#how">How it works</a><a href="#try">Try it</a></nav>
+    <nav class="am-m-links">${rows.map((r) => `<a href="${r.href}">${r.label}</a>`).join('')}<a href="${base}#how">How it works</a><a href="${base}#try">Try it</a><a href="/pricing">Pricing</a></nav>
     <div class="am-m-foot"><a class="am-m-login" href="/login">Log in</a><a class="fs-cta" href="/signup">Start delivering</a></div>
   </div>
 </header>`;
@@ -117,10 +122,10 @@ function creatorNav(user, recent = []) {
   return {
     home: '/dashboard',
     left: [{ href: '/dashboard', label: 'Deliveries' }, { href: '/dashboard#new', label: 'New delivery' }],
-    right: [{ form: 'logout-form', label: 'Log out' }],
+    right: [{ href: '/pricing', label: 'Plans' }, { form: 'logout-form', label: 'Log out' }],
     primary: [{ href: '/dashboard', label: 'Deliveries' }, { href: '/dashboard#new', label: 'New delivery' },
       ...recent.slice(0, 2).map((r) => ({ href: `/projects/${r.id}`, label: r.title.length > 22 ? r.title.slice(0, 21) + '…' : r.title }))],
-    secondary: [{ href: '/dashboard', label: user.studio || user.name }, { form: 'logout-form', label: 'Log out' }],
+    secondary: [{ href: '/dashboard', label: user.studio || user.name }, { href: '/pricing', label: 'Plans and storage' }, { form: 'logout-form', label: 'Log out' }],
     images: recent.filter((r) => r.cover_id).map((r) => ({ href: `/projects/${r.id}`, src: `/d/${r.share_token}/thumb/${r.cover_id}` })),
   };
 }
@@ -295,11 +300,30 @@ function authForm({ mode, error, values = {} }) {
 </main>` });
 }
 
-function dashboard({ user, projects }) {
+// How much of the creator's plan is in use: a bar, the numbers, and what to do when it's nearly full.
+function storageMeter({ used, plan }, { compact = false } = {}) {
+  if (plan.limit === Infinity) {
+    return `<div class="meter${compact ? ' compact' : ''}"><div class="meter-top"><span><b>${fmtSize(used)}</b> stored</span><span class="muted small">Owner account · no storage limit</span></div></div>`;
+  }
+  const pct = Math.min(100, (used / plan.limit) * 100);
+  const state = used >= plan.limit ? ' over' : pct >= 85 ? ' near' : '';
+  const note = used > plan.limit ? `You're over your ${plan.name} plan by ${fmtSize(used - plan.limit)}. New uploads are paused until you upgrade or delete files.`
+    : used === plan.limit ? `Your ${plan.name} plan is full. Upgrade or delete files to keep uploading.`
+    : pct >= 85 ? `${fmtSize(plan.limit - used)} left on your ${plan.name} plan.` : '';
+  return `<div class="meter${state}${compact ? ' compact' : ''}">
+    <div class="meter-top"><span><b>${fmtSize(used)}</b> of ${planSize(plan.limit)} used</span>
+      <span class="muted small">${esc(plan.name)} plan · <a href="/pricing">${plan.id === 'studio' ? 'Plans' : 'Get more space'}</a></span></div>
+    <div class="meter-bar" role="meter" aria-label="Storage used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct.toFixed(0)}"><i style="width:${Math.max(pct, used > 0 ? 1 : 0).toFixed(2)}%"></i></div>
+    ${note ? `<p class="meter-note small">${note}</p>` : ''}
+  </div>`;
+}
+
+function dashboard({ user, projects, usage }) {
   return layout({ title: 'Deliveries', user, recent: projects, body: `
 <main class="wrap">
   <div class="page-head"><div><h1>Deliveries</h1><p class="muted">${projects.length} project${projects.length === 1 ? '' : 's'}</p></div>
   <a class="btn" href="#new">New delivery</a></div>
+  ${usage ? storageMeter(usage) : ''}
   ${projects.length ? `<div class="cards">${projects.map((p) => `
     <a class="card" href="/projects/${p.id}">
       <div class="cover">${p.cover_thumb ? `<img src="/d/${p.share_token}/thumb/${p.cover_id}" alt="">` : '<div class="cover-empty"></div>'}</div>
@@ -323,8 +347,9 @@ function dashboard({ user, projects }) {
   d.addEventListener('close', () => location.hash === '#new' && history.replaceState(null, '', location.pathname)); })();</script>` });
 }
 
-function projectPage({ user, project: p, assets, stats, origin, saved, recent, direct, storageMissing }) {
+function projectPage({ user, project: p, assets, stats, origin, saved, recent, direct, storageMissing, usage }) {
   const link = `${origin}/d/${p.share_token}`;
+  const left = usage && usage.plan.limit !== Infinity ? usage.plan.limit - usage.used : null;
   return layout({ title: p.title, user, recent, scripts: ['/static/spiral.js', '/static/upload.js'], body: `
 <main class="wrap">
   <a class="back" href="/dashboard">← All deliveries</a>
@@ -344,7 +369,8 @@ function projectPage({ user, project: p, assets, stats, origin, saved, recent, d
       <div class="drop-body">
         <input type="file" id="file-input" multiple hidden>
         <p><b>Drop files here</b> or <button class="link" type="button" onclick="document.getElementById('file-input').click()">browse</button></p>
-        <p class="muted small">Photos, videos, audio, or any final files${direct ? ' · sent straight to cloud storage' : ''}</p>
+        <p class="muted small">Photos, videos, audio, or any final files${direct ? ' · sent straight to cloud storage' : ''}${left > 0 ? ` · ${fmtSize(left)} left on your plan` : ''}</p>
+        ${left !== null && left <= 0 ? `<p class="q-error">Your ${esc(usage.plan.name)} plan is full, so new files can't be added. <a href="/pricing">See plans</a> or delete files you no longer need.</p>` : ''}
         ${storageMissing ? `<p class="q-error">Cloud storage is off because ${esc(storageMissing.join(', '))} ${storageMissing.length === 1 ? 'is' : 'are'} not set in the server's variables.</p>` : ''}
         <div class="uploading" id="uploading" hidden>${SYMBOL('anim-loader')}<span id="uploading-text">Uploading</span></div>
         <div id="queue"></div>
@@ -384,6 +410,90 @@ function projectPage({ user, project: p, assets, stats, origin, saved, recent, d
       <form method="post" action="/projects/${p.id}/rotate" onsubmit="return confirm('The old link will stop working. Continue?')"><button class="btn ghost">Generate new link</button></form>
       <form method="post" action="/projects/${p.id}/delete" onsubmit="return confirm('Delete this delivery and all its files?')"><button class="btn ghost danger">Delete delivery</button></form>
     </div>
+  </section>
+</main>` });
+}
+
+const fmtUnix = (t) => t ? new Date(t * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+const dollars = (cents) => `$${(cents / 100).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+// Text for an inline onsubmit="return confirm('…')": quotes escaped for JS first, then the whole thing for HTML.
+const confirmAttr = (text) => ` onsubmit="return confirm(${esc(JSON.stringify(text))})"`;
+
+// Plans page: three plans, a monthly/yearly switch (pure CSS), the creator's usage, and the
+// right button on each plan for where they are now (sign up, upgrade, switch, cancel, keep).
+function pricingPage({ user, usage, plans, billingOn, subscribed, notice = {} }) {
+  const cur = user ? (subscribed ? user.plan : 'free') : null;
+  const curIv = subscribed ? user.plan_interval : null;
+  const ending = subscribed && !!user.plan_cancel_at_end;
+  const ends = user ? fmtUnix(user.plan_period_end) : '';
+  const startIv = curIv === 'year' ? 'year' : 'month';
+  const curName = plans[cur]?.name || 'Free';
+
+  const disabled = (label) => `<button class="btn ghost block" disabled>${label}</button>`;
+  const post = (action, label, { cls = 'btn block', fields = {}, confirm } = {}) =>
+    `<form method="post" action="${action}"${confirm ? confirmAttr(confirm) : ''}>${Object.entries(fields)
+      .map(([k, v]) => `<input type="hidden" name="${k}" value="${esc(v)}">`).join('')}<button class="${cls}">${label}</button></form>`;
+
+  function action(p, iv) {
+    if (!user) return p.id === 'free' ? '<a class="btn ghost block" href="/signup">Start free</a>' : `<a class="btn block" href="/signup">Start with ${p.name}</a>`;
+    if (p.id === 'free') {
+      if (cur === 'free') return disabled('Current plan');
+      if (ending) return `<p class="plan-note">You move to Free on ${ends}.</p>`;
+      return post('/billing/cancel', 'Switch to Free', { cls: 'btn ghost block', confirm: `Cancel your ${curName} plan? You keep its space until ${ends}, then move to Free.` });
+    }
+    if (!billingOn) return disabled('Available soon');
+    if (p.id === cur && iv === curIv) return ending ? post('/billing/resume', `Keep ${p.name}`) : disabled('Current plan');
+    if (usage && usage.used > p.limit) return `${disabled(`Switch to ${p.name}`)}<p class="plan-note">You're storing ${fmtSize(usage.used)}, more than ${p.name} holds.</p>`;
+    const label = p.id === cur ? `Switch to ${iv === 'year' ? 'yearly' : 'monthly'}`
+      : !subscribed || p.limit > plans[cur].limit ? `Upgrade to ${p.name}` : `Switch to ${p.name}`;
+    // A live subscription changes on the spot (no Stripe page), so say what will happen first.
+    const pays = p.limit > plans[cur].limit || (p.id === cur && iv === 'year');
+    const confirm = subscribed ? `Switch to ${p.name} at ${dollars(p[iv])} a ${iv}? ${pays ? 'You pay the difference today with the card on file.' : 'The difference is credited to your next bill.'}` : null;
+    return post('/billing/checkout', label, { fields: { plan: p.id, interval: iv }, confirm });
+  }
+
+  const card = (p) => `
+    <article class="plan${p.id === cur ? ' current' : ''}${p.id === 'pro' ? ' featured' : ''}">
+      <div class="plan-top"><h2>${p.name}</h2>${p.id === cur ? '<span class="tag">Your plan</span>' : ''}</div>
+      <p class="muted small plan-line">${esc(p.line)}</p>
+      <p class="plan-space"><b>${planSize(p.limit)}</b> of storage</p>
+      <p class="plan-price">${p.month ? `<span class="iv-month"><b>${dollars(p.month)}</b> / month</span><span class="iv-year"><b>${dollars(p.year)}</b> / year <small>${dollars(p.year / 12)} a month</small></span>` : '<b>$0</b> <small>forever</small>'}</p>
+      <div class="plan-action"><div class="iv-month">${action(p, 'month')}</div><div class="iv-year">${action(p, 'year')}</div></div>
+    </article>`;
+
+  const messages = [];
+  if (user && notice.welcome) messages.push(subscribed ? `You're on ${curName} now. Your new space is ready.` : 'Thanks! Your payment is being confirmed. Refresh in a moment to see your new plan.');
+  if (user && notice.changed && subscribed) messages.push(`Your plan is now ${curName}, billed ${curIv === 'year' ? 'yearly' : 'monthly'}.`);
+  if (user && notice.canceled && ending) messages.push(`Your ${curName} plan ends on ${ends}. You keep its space until then.`);
+  if (user && notice.resumed && subscribed && !ending) messages.push(`Your ${curName} plan will keep renewing.`);
+  if (user && notice.toosmall && plans[notice.toosmall]) messages.push(`You're storing more than ${plans[notice.toosmall].name} holds. Delete some files first, then switch.`);
+  const pastDue = subscribed && user.plan_status === 'past_due';
+
+  return layout({
+    title: 'Plans', user, bodyClass: user ? '' : 'pricing-public', header: user ? null : amNav({ base: '/', theme: 'light' }), body: `
+<main class="wrap pricing" data-header-theme="light">
+  <div class="pricing-head">
+    <p class="eyebrow">Plans</p>
+    <h1>Room for every delivery</h1>
+    <p class="lede">Every plan includes unlimited deliveries and full-quality files. Plans differ only in how much you keep stored.</p>
+  </div>
+  ${messages.map((m) => `<p class="notice">${esc(m)}</p>`).join('')}
+  ${pastDue ? `<p class="error">Your last payment didn't go through. Update your card under Manage billing to keep your ${esc(curName)} plan.</p>` : ''}
+  ${usage ? storageMeter(usage) : ''}
+  <div class="iv-toggle" role="radiogroup" aria-label="Billing period">
+    <label><input type="radio" name="iv" id="iv-month" value="month"${startIv === 'month' ? ' checked' : ''}>Monthly</label>
+    <label><input type="radio" name="iv" id="iv-year" value="year"${startIv === 'year' ? ' checked' : ''}>Yearly <span>2 months free</span></label>
+  </div>
+  <div class="plans">${Object.values(plans).map(card).join('')}</div>
+  <p class="plans-all muted small">Every plan: unlimited deliveries · original quality · password and expiry on links · view and download stats · Download all</p>
+  ${user && billingOn && user.stripe_customer_id ? `<div class="billing-manage"><span class="muted small">Update your card or download invoices</span>${post('/billing/portal', 'Manage billing', { cls: 'btn ghost small' })}</div>` : ''}
+  ${user && !billingOn ? '<p class="muted small center">Paid plans open as soon as payments are connected.</p>' : ''}
+  <section class="faq">
+    <h2>Questions</h2>
+    <details><summary>What counts toward my storage?</summary><p>The files you keep in your deliveries. Deleting a file or a whole delivery frees its space right away.</p></details>
+    <details><summary>What happens if I go over?</summary><p>Nothing is deleted and your links keep working. New uploads pause until you upgrade or free up space.</p></details>
+    <details><summary>Can I change or cancel anytime?</summary><p>Yes. Upgrades apply right away and you only pay the difference. If you cancel, you keep your plan until the end of the period you paid for, then move to Free.</p></details>
+    <details><summary>Who handles payments?</summary><p>Stripe. Your card details go straight to Stripe and never touch ContentFlows.</p></details>
   </section>
 </main>` });
 }
@@ -535,4 +645,4 @@ ${canDl ? `<div class="dl-selbar" id="dl-selbar" aria-live="polite">
 <script>window.CF_ITEMS = ${JSON.stringify(items).replace(/</g, '\\u003c')};</script>` });
 }
 
-module.exports = { landing, authForm, dashboard, projectPage, unlockPage, deliveryPage, messagePage, TYPES };
+module.exports = { landing, authForm, dashboard, projectPage, unlockPage, deliveryPage, messagePage, pricingPage, fmtSize, TYPES };

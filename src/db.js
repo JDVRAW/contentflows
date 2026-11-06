@@ -66,4 +66,12 @@ CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id);
 if (!db.prepare('PRAGMA table_info(assets)').all().some((c) => c.name === 'storage'))
   db.exec('ALTER TABLE assets ADD COLUMN storage TEXT');
 
+// Storage plan and Stripe subscription, per creator.
+const userCols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
+for (const [name, type] of [['plan', "TEXT NOT NULL DEFAULT 'free'"], ['plan_interval', 'TEXT'], ['plan_status', 'TEXT'],
+  ['plan_period_end', 'INTEGER'], ['plan_cancel_at_end', 'INTEGER NOT NULL DEFAULT 0'],
+  ['stripe_customer_id', 'TEXT'], ['stripe_subscription_id', 'TEXT']]) {
+  if (!userCols.has(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
+}
+
 module.exports = { db, DATA_DIR };

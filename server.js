@@ -10,6 +10,8 @@ const { pipeline } = require('stream');
 const { db, DATA_DIR } = require('./src/db');
 const { kindOf, makeThumb } = require('./src/media');
 const storage = require('./src/storage');
+const billing = require('./src/billing');
+const { PLANS, PAID, INTERVALS, planOf } = require('./src/plans');
 const V = require('./src/views');
 
 const PORT = process.env.PORT || 3000;
@@ -33,6 +35,19 @@ app.use(cookieParser(SECRET));
 app.use('/static', express.static(path.join(__dirname, 'public'), { maxAge: '1h' }));
 const ICONS = path.join(__dirname, 'public', 'icons');
 app.get('/healthz', (req, res) => { db.prepare('SELECT 1').get(); res.type('text').send('ok'); });
+
+// Stripe tells us about subscription changes here (signed with STRIPE_WEBHOOK_SECRET).
+app.post('/stripe/webhook', express.raw({ type: '*/*', limit: '1mb' }), async (req, res) => {
+  if (!billing.webhookReady) return res.status(503).json({ error: 'Stripe is not set up on this server.' });
+  try {
+    const type = await billing.handleWebhook(req.body, req.headers['stripe-signature']);
+    res.json({ received: true, type });
+  } catch (e) {
+    const msg = String(e.message).split('\n')[0].trim();
+    console.error('stripe webhook', msg);
+    res.status(400).json({ error: msg });
+  }
+});
 app.get('/favicon.ico', (req, res) => res.sendFile(path.join(ICONS, 'favicon.ico'), { maxAge: '7d' }));
 app.get('/apple-touch-icon.png', (req, res) => res.sendFile(path.join(ICONS, 'apple-touch-icon.png'), { maxAge: '7d' }));
 app.get('/manifest.webmanifest', (req, res) => res.type('application/manifest+json').sendFile(path.join(ICONS, 'manifest.webmanifest')));
@@ -98,6 +113,64 @@ app.post('/logout', (req, res) => {
   res.redirect('/');
 });
 
+// ---------- storage plans ----------
+const usedBytes = (userId) => db.prepare(`SELECT COALESCE(SUM(a.size), 0) AS n FROM assets a
+  JOIN projects p ON p.id = a.project_id WHERE p.user_id = ?`).get(userId).n;
+// Space held by uploads that are still in progress, so parallel uploads can't overshoot the plan.
+const reserved = new Map();
+const reservedBytes = (userId) => {
+  let n = 0;
+  for (const [id, r] of reserved) {
+    if (Date.now() - r.at > 24 * 3600e3) reserved.delete(id);
+    else if (r.userId === userId) n += r.size;
+  }
+  return n;
+};
+const usage = (user) => ({ used: usedBytes(user.id), plan: planOf(user) });
+// Why a file of this size can't be added right now, or null if it fits.
+function spaceProblem(user, size) {
+  const plan = planOf(user);
+  if (plan.limit === Infinity) return null;
+  const used = usedBytes(user.id) + reservedBytes(user.id);
+  if (used + size <= plan.limit) return null;
+  return `This file needs ${V.fmtSize(size)}, but your ${plan.name} plan has ${V.fmtSize(Math.max(0, plan.limit - used))} left. Upgrade for more space, or delete files you no longer need.`;
+}
+const originOf = (req) => process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+
+app.get('/pricing', (req, res) => {
+  res.send(V.pricingPage({ user: req.user, usage: req.user && usage(req.user), plans: PLANS, billingOn: billing.enabled,
+    subscribed: !!req.user && billing.hasLiveSubscription(req.user), notice: req.query }));
+});
+
+const billingError = (res, e) => {
+  console.error('billing', e.type || '', e.message);
+  res.status(502).send(V.messagePage('Payment problem', `Stripe couldn't complete that: ${e.message}`));
+};
+const needBilling = (req, res, next) => (billing.enabled ? next()
+  : res.status(503).send(V.messagePage('Payments aren\'t set up yet', 'Upgrades open as soon as payments are connected. Try again soon.')));
+
+app.post('/billing/checkout', requireUser, needBilling, async (req, res) => {
+  const { plan, interval } = req.body;
+  if (!PAID.includes(plan) || !INTERVALS.includes(interval)) return res.redirect('/pricing');
+  if (req.user.plan === plan && req.user.plan_interval === interval && billing.hasLiveSubscription(req.user) && !req.user.plan_cancel_at_end)
+    return res.redirect('/pricing');
+  if (usedBytes(req.user.id) > PLANS[plan].limit) return res.redirect(`/pricing?toosmall=${plan}`);
+  try { res.redirect(303, await billing.choosePlan(req.user, plan, interval, originOf(req))); } catch (e) { billingError(res, e); }
+});
+app.get('/billing/done', requireUser, needBilling, async (req, res) => {
+  try { await billing.finishCheckout(req.user, String(req.query.session_id || '')); } catch (e) { console.error('billing done', e.message); }
+  res.redirect('/pricing?welcome=1');
+});
+app.post('/billing/cancel', requireUser, needBilling, async (req, res) => {
+  try { await billing.setCancelAtEnd(req.user, true); res.redirect('/pricing?canceled=1'); } catch (e) { billingError(res, e); }
+});
+app.post('/billing/resume', requireUser, needBilling, async (req, res) => {
+  try { await billing.setCancelAtEnd(req.user, false); res.redirect('/pricing?resumed=1'); } catch (e) { billingError(res, e); }
+});
+app.post('/billing/portal', requireUser, needBilling, async (req, res) => {
+  try { res.redirect(303, await billing.portalUrl(req.user, originOf(req))); } catch (e) { billingError(res, e); }
+});
+
 // ---------- creator: projects ----------
 app.get('/dashboard', requireUser, (req, res) => {
   const projects = db.prepare(`
@@ -112,7 +185,7 @@ app.get('/dashboard', requireUser, (req, res) => {
       ) AS cover_id
     FROM projects p WHERE p.user_id = ? ORDER BY p.created_at DESC, p.id DESC`).all(req.user.id)
     .map((p) => ({ ...p, cover_thumb: !!p.cover_id }));
-  res.send(V.dashboard({ user: req.user, projects }));
+  res.send(V.dashboard({ user: req.user, projects, usage: usage(req.user) }));
 });
 
 const TYPES = Object.keys(V.TYPES);
@@ -146,7 +219,7 @@ app.get('/projects/:id', requireUser, ownProject, (req, res) => {
     FROM projects p WHERE p.user_id = ? ORDER BY p.created_at DESC, p.id DESC LIMIT 3`).all(req.user.id);
   res.send(V.projectPage({ user: req.user, project: p, assets, saved: req.query.saved, recent,
     stats: { views: stats.views || 0, downloads: stats.downloads || 0, last: stats.last },
-    origin: process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`, direct: storage.enabled, storageMissing: storage.partlySet }));
+    origin: originOf(req), direct: storage.enabled, storageMissing: storage.partlySet, usage: usage(req.user) }));
 });
 
 app.post('/projects/:id/settings', requireUser, ownProject, (req, res) => {
@@ -229,7 +302,23 @@ function sweepUnfinishedUploads() {
 const insertAsset = db.prepare(`INSERT INTO assets (project_id, original_name, stored_name, mime, size, kind, storage, position)
   VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM assets WHERE project_id = ?))`);
 
-app.post('/projects/:id/upload', requireUser, ownProject, upload.array('files'), async (req, res) => {
+// Refuse before reading the body when the upload can't fit in the creator's plan.
+const checkSpace = (req, res, next) => {
+  const size = Number(req.headers['content-length']) || 0;
+  const problem = spaceProblem(req.user, size);
+  if (problem) {
+    // Read and discard the body so the browser gets this answer instead of a dropped connection.
+    req.resume();
+    return req.on('end', () => res.status(413).json({ ok: false, error: problem, upgrade: '/pricing' }));
+  }
+  // Hold the space while the file streams in, then count the saved file instead.
+  const id = `form:${token(9)}`;
+  reserved.set(id, { userId: req.user.id, size, at: Date.now() });
+  res.on('close', () => reserved.delete(id));
+  next();
+};
+
+app.post('/projects/:id/upload', requireUser, ownProject, checkSpace, upload.array('files'), async (req, res) => {
   const out = [];
   for (const f of req.files || []) {
     // Browsers send filenames as latin1 through multipart; recover UTF-8 names.
@@ -310,9 +399,12 @@ app.post('/projects/:id/uploads/start', ...direct, async (req, res) => {
   const size = Number(req.body?.size);
   if (!name || !Number.isFinite(size) || size < 0) return res.status(400).json({ ok: false, error: 'Missing file details.' });
   if (size > MAX_UPLOAD) return res.status(413).json({ ok: false, error: `This file is over the ${LIMIT_TEXT} limit.` });
+  const problem = spaceProblem(req.user, size);
+  if (problem) return res.status(413).json({ ok: false, error: problem, upgrade: '/pricing' });
   const ext = path.extname(String(name)).toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 12);
   const key = keyPrefix(req) + token(12) + ext;
   const uploadId = await storage.startUpload(key, String(type || '').slice(0, 200));
+  reserved.set(uploadId, { userId: req.user.id, size, at: Date.now() });
   res.json({ ok: true, key, uploadId, partSize: storage.partSizeFor(size) });
 });
 
@@ -333,6 +425,7 @@ app.post('/projects/:id/uploads/complete', ...direct, async (req, res) => {
   const name = String(f.b.name || 'file').slice(0, 255);
   const type = String(f.b.type || '').slice(0, 200) || null;
   const size = await storage.completeUpload(f.key, f.uploadId, parts);
+  reserved.delete(f.uploadId);
   const kind = kindOf(type || '', name);
   const r = insertAsset.run(req.project.id, name, f.key, type, size, kind, 's3', req.project.id);
   await thumbFromStorage(f.key, kind, r.lastInsertRowid);
@@ -342,6 +435,7 @@ app.post('/projects/:id/uploads/complete', ...direct, async (req, res) => {
 app.post('/projects/:id/uploads/abort', ...direct, async (req, res) => {
   const f = fileInfo(req, res);
   if (!f) return;
+  reserved.delete(f.uploadId);
   await storage.abortUpload(f.key, f.uploadId);
   res.json({ ok: true });
 });
