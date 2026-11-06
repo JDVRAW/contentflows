@@ -87,6 +87,9 @@ dialog::backdrop { background: rgba(0,0,0,.6); backdrop-filter: blur(4px); }
 .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
 .q-row.done .bar i { background: var(--ok); width: 100% !important; }
 .q-row.failed .bar i { background: var(--danger); }
+.q-error { grid-column: 1 / -1; margin: 2px 0 0; font: 400 13px/1.4 var(--geist); color: var(--danger); }
+.q-summary { margin: 16px 0 4px; font: 400 14px var(--geist); color: var(--text); }
+.q-summary a { color: var(--accent); }
 .asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
 .asset { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
 .thumb { position: relative; aspect-ratio: 4/3; background: var(--surface-2); }
