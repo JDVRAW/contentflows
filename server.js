@@ -13,6 +13,7 @@ const storage = require('./src/storage');
 const billing = require('./src/billing');
 const { PLANS, PAID, INTERVALS, planOf } = require('./src/plans');
 const V = require('./src/views');
+const { mcpRouter, newKey, hashKey } = require('./src/mcp');
 
 const PORT = process.env.PORT || 3000;
 // Cookie signing key: SESSION_SECRET if set, otherwise one generated on first start and kept with the data.
@@ -177,6 +178,11 @@ function spaceProblem(user, size) {
   if (used + size <= plan.limit) return null;
   return `This file needs ${V.fmtSize(size)}, but your ${plan.name} plan has ${V.fmtSize(Math.max(0, plan.limit - used))} left. Upgrade for more space, or delete files you no longer need.`;
 }
+// Bytes the creator can still add, counting uploads in progress.
+const spaceLeft = (user) => {
+  const plan = planOf(user);
+  return plan.limit === Infinity ? Infinity : Math.max(0, plan.limit - usedBytes(user.id) - reservedBytes(user.id));
+};
 const originOf = (req) => process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
 
 app.get('/pricing', (req, res) => {
@@ -478,6 +484,34 @@ app.post('/projects/:id/uploads/abort', ...direct, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- AI assistants (MCP) ----------
+// Creators make API keys on /connect, then add ContentFlows as a connector in Claude or another
+// assistant, which can then list, create and fill deliveries for them (src/mcp.js).
+const mcpUrl = (req, key) => `${originOf(req)}/mcp/${key}`;
+const keysOf = (userId) => db.prepare('SELECT id, name, hint, last_used_at, created_at FROM api_keys WHERE user_id = ? ORDER BY id DESC').all(userId);
+
+app.get('/connect', requireUser, (req, res) => {
+  res.send(V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req) }));
+});
+app.post('/connect/keys', requireUser, (req, res) => {
+  const name = String(req.body.name || '').trim().slice(0, 80) || 'AI assistant';
+  if (keysOf(req.user.id).length >= 20)
+    return res.status(400).send(V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req), error: 'You have 20 keys. Revoke one you no longer use first.' }));
+  const key = newKey();
+  db.prepare('INSERT INTO api_keys (user_id, name, key_hash, hint) VALUES (?, ?, ?, ?)').run(req.user.id, name, hashKey(key), key.slice(-4));
+  // Shown once, on this page; only its hash is kept.
+  res.set('Cache-Control', 'no-store');
+  res.send(V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req), fresh: { name, key, url: mcpUrl(req, key) } }));
+});
+app.post('/connect/keys/:kid/delete', requireUser, (req, res) => {
+  db.prepare('DELETE FROM api_keys WHERE id = ? AND user_id = ?').run(req.params.kid, req.user.id);
+  res.redirect('/connect');
+});
+app.use('/mcp', mcpRouter({
+  db, token, TYPES: V.TYPES, storage, kindOf, makeThumb, insertAsset, removeAssetFiles, spaceProblem, spaceLeft, reserved,
+  usage, originOf, MAX_UPLOAD, UPLOADS, fmtSize: V.fmtSize, userView: billing.view,
+}));
+
 // ---------- client: delivery ----------
 const unlockValue = (p) => crypto.createHash('sha256').update(`${p.id}:${p.password_hash}`).digest('hex').slice(0, 32);
 
@@ -618,7 +652,8 @@ function storageError(err) {
 }
 
 app.use((err, req, res, next) => {
-  console.error(req.method, req.originalUrl, err);
+  // API keys can be part of /mcp addresses; keep them out of the logs.
+  console.error(req.method, req.originalUrl.replace(/^\/mcp\/[^/?]+/, '/mcp/…'), err);
   if (req.xhr) {
     // Upload errors go back as JSON so the uploader can show the reason on the file's row.
     const known = {

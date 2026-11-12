@@ -84,7 +84,7 @@ function amNav({ base = '', theme = 'dark' } = {}) {
 // The home page header for signed-in creators: same bar, sliding dot and mobile drawer,
 // with the app's own links (the home page sends signed-in visitors to their deliveries).
 function appNav(user, current = '') {
-  const links = [{ href: '/dashboard', label: 'Deliveries' }, { href: '/pricing', label: 'Plans' }];
+  const links = [{ href: '/dashboard', label: 'Deliveries' }, { href: '/connect', label: 'Connect AI' }, { href: '/pricing', label: 'Plans' }];
   const link = (l, cls) => `<a class="${cls}" href="${l.href}"${l.href === current ? ' aria-current="page"' : ''}>${l.label}</a>`;
   return `
 <header class="am" id="am-header" data-theme="light">
@@ -99,7 +99,7 @@ function appNav(user, current = '') {
     </div>
   </div>
   <div class="am-mobile" id="am-mobile" aria-hidden="true">
-    <nav class="am-m-links"><a href="/dashboard">Deliveries</a><a href="/dashboard#new">New delivery</a><a href="/pricing">Plans and storage</a></nav>
+    <nav class="am-m-links"><a href="/dashboard">Deliveries</a><a href="/dashboard#new">New delivery</a><a href="/connect">Connect AI</a><a href="/pricing">Plans and storage</a></nav>
     <div class="am-m-foot"><button class="am-m-login" type="submit" form="logout-form">Log out</button><a class="fs-cta" href="/dashboard#new">New delivery</a></div>
   </div>
 </header>
@@ -538,6 +538,56 @@ function unlockPage({ project, studio, error }) {
 </main>` });
 }
 
+// Connect AI: API keys for the MCP server (/mcp), and how to add ContentFlows to an assistant.
+// fresh: a key just made, shown this once with its connector address.
+function connectPage({ user, keys, origin, fresh, error }) {
+  const exampleUrl = fresh ? fresh.url : `${origin}/mcp/cf_your-key`;
+  return layout({ title: 'Connect AI', user, current: '/connect', scripts: ['/static/upload.js'], body: `
+<main class="wrap connect">
+  <div class="page-head"><div><h1>Connect AI</h1>
+  <p class="muted">Let Claude or another AI assistant create deliveries, add files from links and send you the share link, just by asking.</p></div></div>
+  ${error ? `<p class="error">${esc(error)}</p>` : ''}
+  ${fresh ? `<section class="share key-fresh">
+    <div><h3>Your connector address for ${esc(fresh.name)}</h3><p class="muted small">Copy it now: it won't be shown again. Anyone with it can manage your deliveries, so keep it private.</p></div>
+    <div class="copy"><input readonly value="${esc(fresh.url)}" id="mcp-url"><button class="btn" type="button" data-copy="#mcp-url">Copy</button></div>
+    <div class="copy"><input readonly value="${esc(fresh.key)}" id="mcp-key" aria-label="API key on its own"><button class="btn ghost" type="button" data-copy="#mcp-key">Copy key</button></div>
+  </section>` : ''}
+
+  <section class="settings">
+    <h2>API keys</h2>
+    <form method="post" action="/connect/keys" class="key-form">
+      <label>Name <span class="muted">(where you'll use it)</span><input name="name" maxlength="80" placeholder="Claude"></label>
+      <button class="btn">Make a key</button>
+    </form>
+    ${keys.length ? `<div class="key-list">${keys.map((k) => `
+      <div class="key-row"><div><b>${esc(k.name)}</b> <span class="muted small mono">cf_…${esc(k.hint)}</span>
+        <p class="muted small">Made ${fmtDate(k.created_at)} · ${k.last_used_at ? `last used ${fmtDate(k.last_used_at)}` : 'not used yet'}</p></div>
+        <form method="post" action="/connect/keys/${k.id}/delete"${confirmAttr(`Revoke "${k.name}"? Assistants using it will lose access right away.`)}><button class="btn ghost danger">Revoke</button></form>
+      </div>`).join('')}</div>` : '<p class="muted">No keys yet.</p>'}
+  </section>
+
+  <section class="connect-how">
+    <h2>Add it to your assistant</h2>
+    <div class="how-grid">
+      <div class="how-card"><h3>Claude (web, desktop, phone)</h3>
+        <ol><li>Open <b>Settings → Connectors</b> and choose <b>Add custom connector</b>.</li>
+        <li>Name it ContentFlows and paste your connector address as the URL.</li>
+        <li>In a chat, turn on ContentFlows and ask away.</li></ol></div>
+      <div class="how-card"><h3>Claude Code</h3>
+        <pre><code>claude mcp add --transport http contentflows ${esc(exampleUrl)}</code></pre></div>
+      <div class="how-card"><h3>Other apps (Cursor, ChatGPT, …)</h3>
+        <p class="muted small">Add a remote MCP server with the connector address. Apps that take headers can use <code>${esc(origin)}/mcp</code> with <code>Authorization: Bearer &lt;key&gt;</code> instead.</p></div>
+    </div>
+    <h3>Things to ask</h3>
+    <ul class="muted">
+      <li>"Create a photoshoot delivery for Ana López, add the photos from this Dropbox link, and give me the link."</li>
+      <li>"Put a password on the Nike commercial delivery and make it expire at the end of the month."</li>
+      <li>"Which deliveries haven't been downloaded yet?"</li>
+    </ul>
+  </section>
+</main>` });
+}
+
 function messagePage(title, text) {
   return layout({ title, bodyClass: 'auth', body: `<main class="auth-card"><h1>${esc(title)}</h1><p class="muted">${esc(text)}</p></main>` });
 }
@@ -673,4 +723,4 @@ ${canDl ? `<div class="dl-selbar" id="dl-selbar" aria-live="polite">
 <script>window.CF_ITEMS = ${JSON.stringify(items).replace(/</g, '\\u003c')};</script>` });
 }
 
-module.exports = { landing, authForm, dashboard, projectPage, unlockPage, deliveryPage, messagePage, pricingPage, fmtSize, TYPES };
+module.exports = { landing, authForm, dashboard, projectPage, connectPage, unlockPage, deliveryPage, messagePage, pricingPage, fmtSize, TYPES };

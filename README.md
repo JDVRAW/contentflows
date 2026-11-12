@@ -13,6 +13,7 @@ A delivery platform for creatives. Upload final photoshoots, music videos, comme
 - **Link controls**: optional password, expiry date, downloads on/off, regenerate link to revoke the old one
 - **Security**: delivery links carry a random 128-bit code; passwords are stored as bcrypt hashes; after 10 wrong passwords from one address, or 30 in total, a delivery or account refuses more tries for 15 minutes. Files in R2 are served through signed links that expire after 6 hours. Only photos, video and audio open in the browser; any other file downloads, and files on the server's disk are sent with a `sandbox` policy, so an uploaded HTML or SVG file can't run as a page
 - **Tracking**: views and downloads per delivery and per file
+- **AI assistants (MCP)**: creators make an API key under Connect AI and add ContentFlows as a connector in Claude or any MCP app, which can then create deliveries, add files from links and hand back the share link (see below)
 - **Storage plans**: Free (10 GB), Pro ($12/month, 250 GB) and Studio ($29/month, 1 TB), yearly at 10× the monthly price. The limit is the total size of the files a creator keeps, shown as a meter on the dashboard and checked before each upload. Upgrades, plan changes and cancellations go through Stripe
 
 ## Brand
@@ -32,6 +33,21 @@ The end of the landing page is adapted from the Hasan Wali site (via Details): a
 "Why ContentFlows" keeps each point to a title and one line, each with a small looping scene above it (pure CSS in `public/styles.css`, `.pv-*`): the same file size going in and coming out, three uploads filling side by side until "Link ready" pops, and a link being tapped that opens into a gallery. The scenes start when they scroll into view and are still frames with reduced motion.
 
 Right after the hero, a full-screen drop section is inspired by fourmula.ai: rounded cubes in brand colours ride three spiral arms from the edges into a circle in the middle that just says "Drop your files" (`public/spiral.js`, CSS 3D, no libraries). The cursor pushes cubes aside and sets them spinning, hovering the circle speeds the spiral up, and dragging files over speeds it up more. Each dropped file becomes a cube wearing its own thumbnail (images and video frames are read in the browser) that flies into the centre; the circle then shows the file count and size with a single "Send them" button that leads to sign-up. On the landing page nothing is uploaded. The same spiral sits behind the real upload area on a project page, where dropped files fly in while they upload. Animation pauses when off screen and is static with reduced motion.
+
+## AI assistants (MCP)
+
+ContentFlows is also a remote [MCP](https://modelcontextprotocol.io) server, so Claude, ChatGPT, Cursor and other assistants can work on a creator's deliveries when asked ("create a photoshoot delivery for Ana, add the photos from this Dropbox link and give me the link").
+
+- **Keys**: on `/connect` (Connect AI in the header) a creator makes a named API key. It's shown once; only its SHA-256 hash is stored. Keys can be revoked there, and the page shows when each was last used.
+- **Address**: `POST /mcp/<key>` (for apps whose connector screen only takes a URL, like Claude's custom connectors), or `POST /mcp` with `Authorization: Bearer <key>`. Streamable HTTP, stateless, JSON responses. Keys in addresses are masked in error logs.
+- **Tools**: `list_deliveries`, `get_delivery`, `create_delivery`, `update_delivery` (title, client, message, password, expiry, downloads), `add_file_from_url`, `set_cover`, `remove_file`, `new_share_link`, `get_storage`. Every tool only sees the key owner's deliveries. Deleting a whole delivery is left to the app.
+- **Files by link**: `add_file_from_url` downloads a public http(s) link (Dropbox and Google Drive share links are turned into their download links), checks the per-file limit and the creator's plan while it downloads, makes a thumbnail, and stores the file on disk or in the bucket like any upload. Only public internet addresses are allowed: links to this server, private networks or cloud metadata addresses are refused, including after redirects. Very large videos are better uploaded in the app, since assistants stop waiting after a while.
+
+Try it with Claude Code:
+
+```bash
+claude mcp add --transport http contentflows https://your-site/mcp/cf_your-key
+```
 
 ## Run locally
 

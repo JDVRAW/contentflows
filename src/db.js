@@ -76,4 +76,19 @@ for (const [name, type] of [['plan', "TEXT NOT NULL DEFAULT 'free'"], ['plan_int
   if (!userCols.has(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
 }
 
+// Keys a creator makes so an AI assistant can work on their deliveries through /mcp.
+// Only a SHA-256 hash of each key is kept; the key itself is shown once, when it's made.
+db.exec(`
+CREATE TABLE IF NOT EXISTS api_keys (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  key_hash TEXT UNIQUE NOT NULL,
+  hint TEXT NOT NULL,
+  last_used_at TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
+`);
+
 module.exports = { db, DATA_DIR };

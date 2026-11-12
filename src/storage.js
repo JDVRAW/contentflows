@@ -5,8 +5,9 @@
 // Without those variables, files stay on the local disk as before.
 const {
   S3Client, CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand,
-  AbortMultipartUploadCommand, HeadObjectCommand, GetObjectCommand, DeleteObjectCommand,
+  AbortMultipartUploadCommand, HeadObjectCommand, GetObjectCommand, DeleteObjectCommand, PutObjectCommand,
 } = require('@aws-sdk/client-s3');
+const fs = require('fs');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 // Values pasted into a host's settings often carry stray spaces or quotes.
@@ -52,6 +53,32 @@ async function completeUpload(Key, UploadId, parts) {
 
 const abortUpload = (Key, UploadId) => client.send(new AbortMultipartUploadCommand({ Bucket, Key, UploadId })).catch(() => {});
 
+// Upload a file from this server's disk (files an assistant adds by link land here first).
+// Small files go in one request; bigger ones in parts, read straight from the file.
+async function putFile(Key, file, ContentType) {
+  const size = fs.statSync(file).size;
+  ContentType = ContentType || 'application/octet-stream';
+  if (size <= 64 * MiB) {
+    await client.send(new PutObjectCommand({ Bucket, Key, ContentType, ContentLength: size, Body: fs.createReadStream(file) }));
+    return size;
+  }
+  const UploadId = await startUpload(Key, ContentType);
+  try {
+    const step = partSizeFor(size);
+    const parts = [];
+    for (let start = 0, PartNumber = 1; start < size; start += step, PartNumber++) {
+      const end = Math.min(size, start + step);
+      const r = await client.send(new UploadPartCommand({ Bucket, Key, UploadId, PartNumber, ContentLength: end - start,
+        Body: fs.createReadStream(file, { start, end: end - 1 }) }));
+      parts.push({ PartNumber, ETag: r.ETag });
+    }
+    return await completeUpload(Key, UploadId, parts);
+  } catch (e) {
+    await abortUpload(Key, UploadId);
+    throw e;
+  }
+}
+
 // Content-Disposition with a UTF-8 file name (RFC 6266), safe for any characters.
 const disposition = (type, name) =>
   `${type}; filename="${name.replace(/[^\x20-\x7e]|["\\]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}`;
@@ -77,4 +104,4 @@ const remove = (Key) => client.send(new DeleteObjectCommand({ Bucket, Key })).ca
 // Some S3 variables set but not all: almost always a setup slip worth pointing out.
 const partlySet = missing.length > 0 && missing.length < REQUIRED.length ? missing : null;
 
-module.exports = { enabled, describe, partlySet, partSizeFor, startUpload, signParts, completeUpload, abortUpload, signedGet, getRange, getStream, remove, disposition };
+module.exports = { enabled, describe, partlySet, partSizeFor, startUpload, signParts, completeUpload, abortUpload, signedGet, getRange, getStream, remove, disposition, putFile };
