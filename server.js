@@ -652,8 +652,9 @@ app.get('/d/:token/zip', loadDelivery, requireUnlocked, (req, res) => {
       zip.append(await storage.getStream(e.a.stored_name), { name: e.name });
     } catch (err) { console.error('zip', e.a.stored_name, err.message); res.destroy(); }
   };
-  zip.on('entry', () => { if (!res.destroyed) next(); });
-  next();
+  const step = () => next().catch((e) => { console.error('zip', e.message); res.destroy(); });
+  zip.on('entry', () => { if (!res.destroyed) step(); });
+  step();
 });
 
 // Errors from R2, explained in terms of the setup step that fixes them.
@@ -694,6 +695,21 @@ app.use((err, req, res, next) => {
 });
 
 if (require.main === module) {
+  // A stray rejected promise would otherwise stop the whole server (Node's default), dropping every
+  // upload and delivery in progress. Log it with what was going on instead, and keep serving.
+  const mb = () => { const m = process.memoryUsage(); return `memory ${Math.round(m.rss / 1048576)} MB (heap ${Math.round(m.heapUsed / 1048576)} MB)`; };
+  process.on('unhandledRejection', (e) => console.error('[crash-guard] unhandled rejection, kept running:', e, mb()));
+  // A thrown error the code didn't expect leaves the process in an unknown state: log it clearly,
+  // then exit so Railway starts a clean one.
+  process.on('uncaughtException', (e) => { console.error('[crash] uncaught exception, restarting:', e, mb()); process.exit(1); });
+  // Railway stops the old copy with SIGTERM on each deploy; say so, so it isn't mistaken for a crash.
+  process.on('SIGTERM', () => { console.log('[stop] SIGTERM received (redeploy or restart),', mb()); process.exit(0); });
+  // Memory is the usual reason a container gets killed without a word in the logs; note when it runs high.
+  let warned = 0;
+  setInterval(() => {
+    const rss = process.memoryUsage().rss / 1048576;
+    if (rss > Number(process.env.MEMORY_WARN_MB || 700) && Date.now() - warned > 5 * 60e3) { warned = Date.now(); console.warn('[memory] high:', mb()); }
+  }, 15e3).unref();
   try { sweepUnfinishedUploads(); } catch (e) { console.error('cleanup failed', e); }
   console.log(`Files are stored in ${storage.enabled ? `object storage, ${storage.describe}` : storage.describe}`);
   const server = app.listen(PORT, () => {
