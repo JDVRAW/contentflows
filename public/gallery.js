@@ -29,6 +29,28 @@
       shown[0].classList.add(span === cols ? 'wide-full' : 'wide');
     });
   }
+  // ---- Folders fold shut with their arrow or name. This browser remembers which ones, per link. ----
+  const foldKey = `cf-folds:${location.pathname.split('/')[2] || ''}`;
+  let shut = [];
+  try { shut = JSON.parse(localStorage.getItem(foldKey) || '[]'); } catch (e) {}
+  const foldable = [...document.querySelectorAll('.dl-group, .dl-fgroup')].filter((g) => g.querySelector('.dl-fold'));
+  const setFold = (g, on) => {
+    g.classList.toggle('collapsed', on);
+    const b = g.querySelector('.dl-fold'), name = g.querySelector('.dl-fold-name').textContent;
+    b.setAttribute('aria-expanded', String(!on)); b.setAttribute('aria-label', `${on ? 'Open' : 'Close'} ${name}`);
+  };
+  foldable.forEach((g) => { if (shut.includes(g.dataset.folder)) setFold(g, true); });
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('.dl-fold, .dl-fold-name');
+    if (!t) return;
+    const g = t.closest('.dl-group, .dl-fgroup'), on = !g.classList.contains('collapsed');
+    // A folder name can be in both the gallery and the files list; both fold together.
+    foldable.filter((x) => x.dataset.folder === g.dataset.folder).forEach((x) => setFold(x, on));
+    shut = on ? [...new Set([...shut, g.dataset.folder])] : shut.filter((f) => f !== g.dataset.folder);
+    try { localStorage.setItem(foldKey, JSON.stringify(shut)); } catch (err) {}
+    if (!on) balance();
+  });
+
   balance();
   let bt = 0;
   addEventListener('resize', () => { clearTimeout(bt); bt = setTimeout(balance, 100); });
