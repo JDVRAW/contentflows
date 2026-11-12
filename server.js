@@ -708,8 +708,9 @@ app.post('/connect/keys/:kid/delete', requireUser, (req, res) => {
   db.prepare('DELETE FROM api_keys WHERE id = ? AND user_id = ?').run(req.params.kid, req.user.id);
   res.redirect('/connect');
 });
-// ---------- creator: branding ----------
-// Everyone sets the studio name clients see; Pro and up can also upload their logo.
+// ---------- creator: profile ----------
+// One page for the creator's own account: their name and login email, the brand/studio name
+// clients see (every plan), their logo (Pro and up) and their password.
 const LOGO_MAX = 2 * 1024 * 1024;
 const logoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: LOGO_MAX, files: 1 } }).single('logo');
 // The file type is read from the bytes, not the name the browser sent.
@@ -722,20 +723,72 @@ function logoType(buf) {
 }
 const LOGO_KINDS = { dark: 'logo_dark', light: 'logo_light' };
 const dropLogoFile = (f) => { if (f) fs.rm(path.join(BRAND, path.basename(f)), { force: true }, () => {}); };
-const brandingPage = (req, extra = {}) => V.brandingPage({ user: req.user, canBrand: canBrand(req.user), ...extra });
+const profilePage = (req, extra = {}) => V.profilePage({ user: req.user, canBrand: canBrand(req.user), ...extra });
+const PROFILE_NOTICES = {
+  details: 'Your details are saved.', password: 'Password changed. Other devices were logged out.',
+  saved: 'Brand/Studio name saved.', logo: 'Logo saved. Your deliveries show it now.', removed: 'Logo removed.',
+};
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-app.get('/branding', requireUser, (req, res) => {
-  res.send(brandingPage(req, { notice: { saved: 'Brand/Studio name saved.', logo: 'Logo saved. Your deliveries show it now.', removed: 'Logo removed.' }[req.query.notice] }));
+app.get('/profile', requireUser, (req, res) => {
+  res.send(profilePage(req, { notice: PROFILE_NOTICES[req.query.notice] }));
 });
-app.post('/branding', requireUser, (req, res) => {
+// Branding lived on its own page before it moved into the profile.
+app.get('/branding', (req, res) => res.redirect(301, '/profile#brand'));
+
+// Name and login email. A new email needs the current password, since it's how the account logs in.
+app.post('/profile/details', requireUser, (req, res) => {
+  const name = String(req.body.name || '').trim().slice(0, 80);
+  const email = String(req.body.email || '').trim().toLowerCase().slice(0, 254);
+  const values = { name, email };
+  const fail = (status, msg) => res.status(status).send(profilePage(req, { error: msg, section: 'details', values }));
+  if (!name) return fail(400, 'Add your name.');
+  if (!EMAIL_RE.test(email)) return fail(400, 'That email doesn\'t look right.');
+  if (email !== req.user.email) {
+    const target = `profile:${req.user.id}`;
+    const wait = guessWait(req, target);
+    if (wait) return fail(429, waitText(wait));
+    if (!bcrypt.compareSync(String(req.body.current || ''), req.user.password_hash)) {
+      countMiss(req, target);
+      return fail(401, 'To change your email, enter your current password.');
+    }
+    clearMisses(req, target);
+    if (db.prepare('SELECT 1 FROM users WHERE email = ? AND id != ?').get(email, req.user.id))
+      return fail(400, 'Another account already uses that email.');
+  }
+  db.prepare('UPDATE users SET name = ?, email = ? WHERE id = ?').run(name, email, req.user.id);
+  if (email !== req.user.email) billing.updateCustomerEmail(req.user, email);
+  res.redirect('/profile?notice=details');
+});
+
+// A new password logs out every other session, in case the old one was known to someone else.
+app.post('/profile/password', requireUser, (req, res) => {
+  const { current = '', password = '', confirm = '' } = req.body;
+  const fail = (status, msg) => res.status(status).send(profilePage(req, { error: msg, section: 'password' }));
+  const target = `profile:${req.user.id}`;
+  const wait = guessWait(req, target);
+  if (wait) return fail(429, waitText(wait));
+  if (!bcrypt.compareSync(String(current), req.user.password_hash)) {
+    countMiss(req, target);
+    return fail(401, 'Your current password isn\'t right.');
+  }
+  clearMisses(req, target);
+  if (String(password).length < 8) return fail(400, 'Use at least 8 characters for the new password.');
+  if (password !== confirm) return fail(400, 'The two new passwords don\'t match.');
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(String(password), 10), req.user.id);
+  db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(req.user.id, req.signedCookies.cf_session);
+  res.redirect('/profile?notice=password');
+});
+
+app.post('/profile/studio', requireUser, (req, res) => {
   const studio = String(req.body.studio || '').trim().slice(0, 80);
   db.prepare('UPDATE users SET studio = ? WHERE id = ?').run(studio || null, req.user.id);
-  res.redirect('/branding?notice=saved');
+  res.redirect('/profile?notice=saved#brand');
 });
-app.post('/branding/logo', requireUser, (req, res) => {
-  if (!canBrand(req.user)) return res.status(403).send(brandingPage(req, { error: 'Logos come with Pro and Studio. Upgrade to add yours.' }));
+app.post('/profile/logo', requireUser, (req, res) => {
+  if (!canBrand(req.user)) return res.status(403).send(profilePage(req, { error: 'Logos come with Pro and Studio. Upgrade to add yours.', section: 'brand' }));
   logoUpload(req, res, (err) => {
-    const fail = (msg) => res.status(400).send(brandingPage(req, { error: msg }));
+    const fail = (msg) => res.status(400).send(profilePage(req, { error: msg, section: 'brand' }));
     if (err) return fail(err.code === 'LIMIT_FILE_SIZE' ? 'That logo is over 2 MB. Export a smaller PNG or SVG and try again.' : 'That upload didn\'t go through. Try again.');
     const col = LOGO_KINDS[req.body.kind];
     if (!col) return fail('Choose which logo this is.');
@@ -747,16 +800,16 @@ app.post('/branding/logo', requireUser, (req, res) => {
     fs.writeFileSync(path.join(BRAND, name), req.file.buffer);
     dropLogoFile(req.user[col]);
     db.prepare(`UPDATE users SET ${col} = ? WHERE id = ?`).run(name, req.user.id);
-    res.redirect('/branding?notice=logo');
+    res.redirect('/profile?notice=logo#brand');
   });
 });
-app.post('/branding/logo/remove', requireUser, (req, res) => {
+app.post('/profile/logo/remove', requireUser, (req, res) => {
   const col = LOGO_KINDS[req.body.kind];
   if (col) {
     dropLogoFile(req.user[col]);
     db.prepare(`UPDATE users SET ${col} = NULL WHERE id = ?`).run(req.user.id);
   }
-  res.redirect('/branding?notice=removed');
+  res.redirect('/profile?notice=removed#brand');
 });
 // Logos are public (they show on delivery pages). Each upload gets a new name, so they cache for good.
 // An SVG opened on its own runs no scripts.

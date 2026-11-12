@@ -4,7 +4,7 @@ A delivery platform for creatives. Upload final photoshoots, music videos, comme
 
 ## Features
 
-- **Creator accounts** with a studio name shown to clients, editable under Branding
+- **Creator accounts** with a Profile page: name, login email, password, the brand/studio name shown to clients, and (Pro and up) their logo
 - **Your logo on deliveries** (Pro and Studio): upload a version for light backgrounds and one for dark, and it replaces the studio name at the top of every delivery and on the password page. On Free, or after a downgrade, clients see the studio name and the saved logo comes back on upgrade. Logos live in `DATA_DIR/brand`.
 - **Deliveries** (photoshoot, personal branding shoot, music video, commercial, commercial AD, campaign, brand kit, film, podcast, final project) with client name, email and a personal message
 - **Drag-and-drop uploads** with per-file progress, any file type, large files supported (default limit 10 GB per file). With object storage set up, files go straight from the browser to the bucket in parts, so big videos never pass through the server

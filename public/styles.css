@@ -911,7 +911,13 @@ html.am-lock, html.am-lock body { overflow: hidden; }
 .unlock-brand .brand-mark img { height: 36px; max-width: 220px; }
 @media (max-width: 767px) { .brand-mark img { height: 24px; max-width: 140px; } }
 
-.branding .settings + .settings { margin-top: 24px; }
+.profile .settings + .settings { margin-top: 24px; }
+.profile .settings > .error { margin: 0 0 12px; }
+.profile .email-pass[hidden] { display: none; }
+.profile-pass { display: grid; grid-template-columns: 1fr 1fr; column-gap: 14px; }
+.profile-pass .span2, .profile-pass .form-end { grid-column: 1 / -1; }
+@media (max-width: 640px) { .profile-pass { grid-template-columns: 1fr; } }
+a.am-studio:hover { color: var(--amc); }
 .brand-head { display: flex; align-items: center; gap: 12px; }
 .brand-head .tag { margin: 0; }
 .logo-slots { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; }

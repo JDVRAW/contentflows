@@ -152,6 +152,13 @@ async function portalUrl(user, origin) {
   return s.url;
 }
 
+// Keep receipts going to the right place after a creator changes their login email. Best effort:
+// a Stripe hiccup doesn't block the profile save.
+function updateCustomerEmail(user, email) {
+  if (!enabled || !user.stripe_customer_id) return;
+  stripe.customers.update(user.stripe_customer_id, { email }).catch((e) => console.error('stripe email update', e.message));
+}
+
 // Verify and apply a webhook event. Throws if the signature is wrong.
 async function handleWebhook(rawBody, signature) {
   const event = stripe.webhooks.constructEvent(rawBody, signature, WEBHOOK_SECRET);
@@ -165,4 +172,4 @@ async function handleWebhook(rawBody, signature) {
 }
 
 module.exports = { enabled, mode: MODE, webhookReady: enabled && !!WEBHOOK_SECRET, view, labelOldCustomers,
-  choosePlan, finishCheckout, setCancelAtEnd, portalUrl, handleWebhook, hasLiveSubscription };
+  choosePlan, finishCheckout, setCancelAtEnd, portalUrl, handleWebhook, hasLiveSubscription, updateCustomerEmail };
