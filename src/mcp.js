@@ -106,7 +106,7 @@ function mcpRouter(ctx) {
     }, async ({ delivery_id }) => {
       const p = own(delivery_id);
       if (!p) return fail(`No delivery with id ${delivery_id}.`);
-      const files = db.prepare(`SELECT a.id, a.original_name AS name, a.kind, a.size,
+      const files = db.prepare(`SELECT a.id, a.original_name AS name, a.folder, a.kind, a.size,
           (SELECT COUNT(*) FROM events e WHERE e.asset_id = a.id AND e.type = 'download') AS downloads
         FROM assets a WHERE a.project_id = ? ORDER BY a.position, a.id`).all(p.id)
         .map((f) => ({ ...f, size: fmtSize(f.size), is_cover: f.id === p.cover_asset_id }));

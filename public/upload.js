@@ -24,10 +24,13 @@
   // upgrade: set when the file doesn't fit in the creator's storage plan, so the row can link to the plans.
   const fail = (message, fatal, upgrade) => Object.assign(new Error(message), { fatal, upgrade });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // The folder each file came from ("BTS" or "BTS/Raw"), so the delivery keeps the uploader's folders.
+  const folderOf = new WeakMap();
 
   // Classic upload: the file goes to this server in one request.
   function sendForm(file, progress) {
     const fd = new FormData();
+    if (folderOf.get(file)) fd.append('folder', folderOf.get(file)); // before the file, so the server has it when the file arrives
     fd.append('files', file);
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -120,7 +123,7 @@
     try {
       await Promise.all(Array.from({ length: Math.min(4, count) }, worker));
       saving();
-      return await api('complete', { key, uploadId, name: file.name, type: file.type, parts });
+      return await api('complete', { key, uploadId, name: file.name, type: file.type, folder: folderOf.get(file) || '', parts });
     } catch (e) {
       stop = true;
       xhrs.forEach((x) => x.abort());
@@ -135,7 +138,8 @@
     throw fail(`“${file.name}” can’t be read. If it’s a folder, open it and drop the files inside instead.`, true);
   });
 
-  // Dropped folders arrive as File objects that can't be read, so open them and take the files inside.
+  // Dropped folders arrive as File objects that can't be read, so open them and take the files inside,
+  // remembering which folder each one was in.
   // Entries must be taken during the drop event, before the browser clears the drop data.
   async function dropped(dt) {
     const files = [...dt.files];
@@ -147,13 +151,18 @@
       more();
     });
     const out = [];
-    const walk = async (e, nested) => {
-      if (nested && e.name.startsWith('.')) return; // .DS_Store and other hidden files inside folders
-      if (e.isFile) out.push(await new Promise((resolve, reject) => e.file(resolve, reject)));
-      else if (e.isDirectory) for (const child of await list(e)) await walk(child, true);
+    const walk = async (e, folder) => {
+      if (folder && e.name.startsWith('.')) return; // .DS_Store and other hidden files inside folders
+      if (e.isFile) {
+        const file = await new Promise((resolve, reject) => e.file(resolve, reject));
+        if (folder) folderOf.set(file, folder);
+        out.push(file);
+      } else if (e.isDirectory) {
+        for (const child of await list(e)) await walk(child, folder ? `${folder}/${e.name}` : e.name);
+      }
     };
     try {
-      for (const e of entries) await walk(e, false);
+      for (const e of entries) await walk(e, '');
       return out;
     } catch (err) {
       return files;
@@ -240,6 +249,17 @@
   }
 
   input.addEventListener('change', () => sendAll(input.files));
+  // "Browse a folder": the browser gives each file its path inside the picked folder.
+  const folderInput = document.getElementById('folder-input');
+  folderInput?.addEventListener('change', () => {
+    const files = [...folderInput.files].filter((f) => {
+      const parts = (f.webkitRelativePath || '').split('/');
+      if (parts.some((p) => p.startsWith('.'))) return false;
+      if (parts.length > 1) folderOf.set(f, parts.slice(0, -1).join('/'));
+      return true;
+    });
+    sendAll(files);
+  });
   // Count enter/leave so moving over the card inside the zone doesn't flicker the highlight.
   let depth = 0;
   const over = (on) => { drop.classList.toggle('over', on); drop.querySelector('[data-spiral]')?.cfSpiral?.setOver(on); };
