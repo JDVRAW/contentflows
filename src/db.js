@@ -82,6 +82,10 @@ CREATE TABLE IF NOT EXISTS folders (
 );
 `);
 
+// Whether a folder is folded shut on the project page ('' is the "No folder" group).
+if (!db.prepare('PRAGMA table_info(folders)').all().some((c) => c.name === 'collapsed'))
+  db.exec('ALTER TABLE folders ADD COLUMN collapsed INTEGER NOT NULL DEFAULT 0');
+
 // Storage plan and Stripe subscription, per creator.
 const userCols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
 for (const [name, type] of [['plan', "TEXT NOT NULL DEFAULT 'free'"], ['plan_interval', 'TEXT'], ['plan_status', 'TEXT'],

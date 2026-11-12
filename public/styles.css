@@ -851,3 +851,13 @@ html.am-lock, html.am-lock body { overflow: hidden; }
   .folder-head .folder-remove { margin-left: 0; }
 }
 #files.picking { padding-bottom: 110px; }
+
+/* Folding a folder shut on the project page */
+.folder-head .fold { display: grid; place-items: center; width: 26px; height: 26px; margin: 0 -4px 0 0; padding: 0; border: 0; border-radius: 7px;
+  background: none; color: var(--muted); cursor: pointer; transition: background .15s, color .15s; }
+.folder-head .fold:hover { background: var(--surface-2); color: var(--text); }
+.folder-head .fold svg { transition: transform .2s; }
+.folder-head .fold-name { cursor: pointer; }
+.file-group.collapsed .fold svg { transform: rotate(-90deg); }
+.file-group.collapsed > .asset-grid, .file-group.collapsed > .folder-empty { display: none; }
+.file-group.collapsed .folder-head { margin-bottom: 4px; }
