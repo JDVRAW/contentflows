@@ -41,7 +41,7 @@ function mcpRouter(ctx) {
   async function handle(req, res) {
     const server = buildServer(req.user, originOf(req));
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-    res.on('close', () => { transport.close(); server.close(); });
+    res.on('close', () => { transport.close().catch(() => {}); server.close().catch(() => {}); });
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
   }
