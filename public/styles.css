@@ -883,3 +883,13 @@ html.am-lock, html.am-lock body { overflow: hidden; }
 .order-btn:disabled { opacity: .3; cursor: default; }
 @media (max-width: 760px) { .folder-rename input[name="name"] { width: 140px; } }
 .folder-head:has(.folder-rename:not([hidden])) .fold-name + .muted { display: none; }
+
+/* Client page: folding folders shut */
+.dl-fold { display: grid; place-items: center; width: 28px; height: 28px; margin: 0 -2px 0 -6px; padding: 0; border: 0; border-radius: 8px;
+  background: none; color: #111113; cursor: pointer; transition: background .15s; }
+@media (hover: hover) { .dl-fold:hover { background: #ece7d3; } }
+.dl-fold svg { transition: transform .2s; }
+.dl-fold-name { cursor: pointer; }
+.collapsed > .dl-folder .dl-fold svg { transform: rotate(-90deg); }
+.dl-group.collapsed > .dl-grid, .dl-fgroup.collapsed > .dl-list { display: none; }
+.dl-group.collapsed > .dl-folder { margin-bottom: 0; }
