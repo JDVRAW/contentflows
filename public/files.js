@@ -1,5 +1,24 @@
 // Project page: pick several files, move them into folders (with the Move menu or by dragging
 // onto a folder) and delete only the picked ones.
+// Renaming a folder: the name turns into a small form in place.
+(() => {
+  const root = document.getElementById('files');
+  if (!root) return;
+  const show = (head, on) => {
+    head.querySelector('.folder-rename').hidden = !on;
+    head.querySelector('.fold-name').hidden = on;
+    head.querySelector('[data-rename]').hidden = on;
+    if (on) { const i = head.querySelector('.folder-rename input[name="name"]'); i.focus(); i.select(); }
+  };
+  root.addEventListener('click', (e) => {
+    const open = e.target.closest('[data-rename]'), cancel = e.target.closest('[data-rename-cancel]');
+    if (open || cancel) show((open || cancel).closest('.folder-head'), !!open);
+  });
+  root.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && e.target.closest('.folder-rename')) { e.stopPropagation(); show(e.target.closest('.folder-head'), false); }
+  });
+})();
+
 (() => {
   const bar = document.getElementById('bulk');
   const root = document.getElementById('files');

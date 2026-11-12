@@ -870,3 +870,16 @@ html.am-lock, html.am-lock body { overflow: hidden; }
 .folder-link .copy input { flex: 1; margin: 0; padding: 6px 10px; font-size: 13px; }
 .folder-link form { margin: 0; }
 @media (max-width: 760px) { .folder-link { margin-left: 0; } }
+
+/* Renaming and ordering folders */
+.folder-rename { display: flex; align-items: center; gap: 8px; margin: 0; }
+.folder-rename[hidden] { display: none; }
+.folder-rename input[name="name"] { width: 200px; margin: 0; padding: 5px 10px; font-size: 14px; }
+.folder-order { display: inline-flex; gap: 4px; }
+.folder-order form { margin: 0; }
+.order-btn { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 7px;
+  background: none; color: var(--text); font-size: 14px; line-height: 1; cursor: pointer; }
+.order-btn:hover:not(:disabled) { border-color: var(--muted); }
+.order-btn:disabled { opacity: .3; cursor: default; }
+@media (max-width: 760px) { .folder-rename input[name="name"] { width: 140px; } }
+.folder-head:has(.folder-rename:not([hidden])) .fold-name + .muted { display: none; }

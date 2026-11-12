@@ -261,11 +261,12 @@ app.get('/projects/:id', requireUser, ownProject, (req, res) => {
   const stats = db.prepare(`SELECT
       SUM(type = 'view') AS views, SUM(type IN ('download', 'zip')) AS downloads, MAX(created_at) AS last
     FROM events WHERE project_id = ?`).get(p.id);
-  const rows = db.prepare('SELECT path, collapsed, share_token FROM folders WHERE project_id = ? ORDER BY id').all(p.id);
+  const rows = db.prepare('SELECT path, collapsed, share_token, position FROM folders WHERE project_id = ? ORDER BY id').all(p.id);
   const folders = rows.map((r) => r.path).filter(Boolean);
   const collapsed = rows.filter((r) => r.collapsed).map((r) => r.path);
+  const folderOrder = rows.filter((r) => r.path && r.position !== null).sort((a, b) => a.position - b.position).map((r) => r.path);
   const folderLinks = Object.fromEntries(rows.filter((r) => r.share_token && r.path).map((r) => [r.path, r.share_token]));
-  res.send(V.projectPage({ user: req.user, project: p, assets, folders, collapsed, folderLinks, saved: req.query.saved, notice: req.query.notice,
+  res.send(V.projectPage({ user: req.user, project: p, assets, folders, collapsed, folderLinks, folderOrder, saved: req.query.saved, notice: req.query.notice,
     stats: { views: stats.views || 0, downloads: stats.downloads || 0, last: stats.last },
     origin: originOf(req), direct: storage.enabled, storageMissing: storage.partlySet, usage: usage(req.user) }));
 });
@@ -354,6 +355,53 @@ app.post('/projects/:id/folders/link', requireUser, ownProject, (req, res) => {
   saveFolder.run(req.project.id, folder);
   db.prepare('UPDATE folders SET share_token = COALESCE(share_token, ?) WHERE project_id = ? AND path = ?').run(token(16), req.project.id, folder);
   back(req, res, `Link for ${label} is ready. Whoever opens it only sees that folder.`);
+});
+
+// The creator's folder order for a delivery, as folder paths.
+const folderOrderOf = (projectId) => db.prepare("SELECT path FROM folders WHERE project_id = ? AND path != '' AND position IS NOT NULL ORDER BY position")
+  .all(projectId).map((r) => r.path);
+
+// Move a folder one place up or down. The whole list as shown is saved, so the order sticks.
+app.post('/projects/:id/folders/order', requireUser, ownProject, (req, res) => {
+  const folder = cleanFolder(req.body?.folder);
+  const assets = db.prepare('SELECT folder, original_name FROM assets WHERE project_id = ? ORDER BY position, id').all(req.project.id);
+  const kept = db.prepare("SELECT path FROM folders WHERE project_id = ? AND path != '' ORDER BY id").all(req.project.id).map((r) => r.path);
+  const list = V.byFolder(assets, kept, folderOrderOf(req.project.id)).map((g) => g.folder).filter(Boolean);
+  const i = list.indexOf(folder), j = i + (req.body?.dir === 'up' ? -1 : 1);
+  if (i < 0 || j < 0 || j >= list.length) return back(req, res);
+  [list[i], list[j]] = [list[j], list[i]];
+  db.transaction(() => list.forEach((f, n) => {
+    saveFolder.run(req.project.id, f);
+    db.prepare('UPDATE folders SET position = ? WHERE project_id = ? AND path = ?').run(n, req.project.id, f);
+  }))();
+  back(req, res);
+});
+
+// Rename a folder (only its own name; it stays inside the same parent). Its files, the folders
+// inside it, its link, its place in the order and whether it's closed all carry over.
+app.post('/projects/:id/folders/rename', requireUser, ownProject, (req, res) => {
+  const folder = cleanFolder(req.body?.folder);
+  const name = String(req.body?.name || '').replace(/[\\/]+/g, ' ');
+  if (!folder || !cleanFolder(name)) return back(req, res, 'Give the folder a name.');
+  const parent = folder.includes('/') ? folder.slice(0, folder.lastIndexOf('/')) : null;
+  const next = cleanFolder((parent ? parent + '/' : '') + cleanFolder(name));
+  if (next === folder) return back(req, res);
+  const pid = req.project.id;
+  const taken = db.prepare('SELECT 1 FROM folders WHERE project_id = ? AND (path = ? OR path LIKE ? ESCAPE ?) UNION SELECT 1 FROM assets WHERE project_id = ? AND (folder = ? OR folder LIKE ? ESCAPE ?)');
+  const like = next.replace(/[\\%_]/g, '\\$&') + '/%';
+  if (taken.get(pid, next, like, '\\', pid, next, like, '\\'))
+    return back(req, res, `There's already a folder called “${next.split('/').join(' / ')}”. Pick another name.`);
+  const swap = (f) => (f === folder ? next : next + f.slice(folder.length));
+  const inside = (f) => f === folder || (f || '').startsWith(folder + '/');
+  db.transaction(() => {
+    for (const a of db.prepare('SELECT id, folder FROM assets WHERE project_id = ? AND folder IS NOT NULL').all(pid))
+      if (inside(a.folder)) setFolder.run(swap(a.folder), a.id);
+    for (const f of db.prepare('SELECT id, path FROM folders WHERE project_id = ?').all(pid))
+      if (inside(f.path)) db.prepare('UPDATE folders SET path = ? WHERE id = ?').run(swap(f.path), f.id);
+    // A folder that only existed through its files gets a row now, so it keeps its place in the order.
+    saveFolder.run(pid, next);
+  })();
+  back(req, res, `Renamed to “${next.split('/').join(' / ')}”.`);
 });
 
 // Removing a folder keeps its files: they move up into the folder it was in (or out of folders).
@@ -678,7 +726,9 @@ app.get('/d/:token', loadDelivery, (req, res) => {
   if (!req.unlocked) return res.send(V.unlockPage({ project: p, studio }));
   track(req, 'view');
   const assets = deliveryAssets(req);
-  res.send(V.deliveryPage({ project: p, assets, studio, host: req.get('host') }));
+  // Through a folder link, the order is the same but read from inside that folder.
+  const order = folderOrderOf(p.id).filter((f) => !req.scope || f.startsWith(req.scope + '/')).map((f) => (req.scope ? f.slice(req.scope.length + 1) : f));
+  res.send(V.deliveryPage({ project: p, assets, studio, host: req.get('host'), folderOrder: order }));
 });
 
 app.post('/d/:token/unlock', loadDelivery, (req, res) => {

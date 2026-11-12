@@ -376,7 +376,8 @@ function dashboard({ user, projects, usage }) {
 // Files grouped by the folder they were uploaded in: loose files first, then each folder in the
 // order its first file arrived. Folder paths show as "BTS / Raw".
 // Folders listed in `keep` (made by hand on the project page) show even while empty.
-function byFolder(assets, keep = []) {
+// `order` is the creator's chosen folder order; folders not in it follow, in upload order.
+function byFolder(assets, keep = [], order = []) {
   const groups = new Map([['', []]]);
   for (const a of assets) {
     const f = a.folder || '';
@@ -386,13 +387,15 @@ function byFolder(assets, keep = []) {
   // Files in a folder upload a few at a time and land out of order, so they're sorted by name like on the uploader's computer.
   const byName = (a, b) => a.original_name.localeCompare(b.original_name, undefined, { numeric: true, sensitivity: 'base' });
   for (const f of keep) if (!groups.has(f)) groups.set(f, []);
+  const rank = (f) => (f === '' ? -1 : order.includes(f) ? order.indexOf(f) : Infinity);
   return [...groups].filter(([folder, items]) => items.length || (folder && keep.includes(folder)))
+    .sort(([a], [b]) => rank(a) - rank(b))
     .map(([folder, items]) => ({ folder, label: folder.split('/').join(' / '), items: folder ? items.sort(byName) : items }));
 }
 const CHEVRON = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const FOLDER_ICON = '<svg class="folder-ico" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2.2h8.4A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>';
 
-function projectPage({ user, project: p, assets, folders = [], collapsed = [], folderLinks = {}, stats, origin, saved, notice, direct, storageMissing, usage }) {
+function projectPage({ user, project: p, assets, folders = [], collapsed = [], folderLinks = {}, folderOrder = [], stats, origin, saved, notice, direct, storageMissing, usage }) {
   const link = `${origin}/d/${p.share_token}`;
   const left = usage && usage.plan.limit !== Infinity ? usage.plan.limit - usage.used : null;
   return layout({ title: p.title, user, current: '/dashboard', scripts: ['/static/spiral.js', '/static/upload.js', '/static/files.js'], body: `
@@ -438,7 +441,7 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
     </div>
     ${notice ? `<p class="ok files-notice">${esc(notice)}</p>` : ''}
     ${(() => {
-      const groups = byFolder(assets, folders);
+      const groups = byFolder(assets, folders, folderOrder);
       if (!groups.length) return '<p class="muted">No files uploaded yet.</p>';
       const anyFolder = groups.some((g) => g.folder);
       // With folders around, "No folder" always shows so files can be dragged back out.
@@ -448,7 +451,14 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
         <button type="button" class="fold" aria-expanded="${shut ? 'false' : 'true'}" aria-label="${shut ? 'Open' : 'Close'} ${esc(g.label || 'No folder')}" title="Open or close this folder">${CHEVRON}</button>
         ${g.items.length ? `<input type="checkbox" class="pick-group" aria-label="Select every file in ${esc(g.label || 'No folder')}">` : ''}
         ${g.folder ? FOLDER_ICON : ''}<b class="fold-name">${esc(g.label || 'No folder')}</b> <span class="muted">${g.items.length}</span>
+        ${g.folder ? `<form method="post" action="/projects/${p.id}/folders/rename" class="folder-rename" hidden>
+          <input type="hidden" name="folder" value="${esc(g.folder)}">
+          <input name="name" value="${esc(g.folder.split('/').pop())}" maxlength="100" required aria-label="New name for ${esc(g.label)}">
+          <button class="btn small">Save</button><button class="link small" type="button" data-rename-cancel>Cancel</button>
+        </form>` : ''}
         ${g.folder ? `<div class="folder-actions">
+        <span class="folder-order">${['up', 'down'].map((d) => `<form method="post" action="/projects/${p.id}/folders/order"><input type="hidden" name="folder" value="${esc(g.folder)}"><input type="hidden" name="dir" value="${d}"><button class="order-btn" title="Move folder ${d}" aria-label="Move ${esc(g.label)} ${d}"${(d === 'up' ? g === groups.find((x) => x.folder) : g === groups[groups.length - 1]) ? ' disabled' : ''}>${d === 'up' ? '↑' : '↓'}</button></form>`).join('')}</span>
+        <button class="link small" type="button" data-rename>Rename</button>
         ${folderLinks[g.folder] ? '' : `<form method="post" action="/projects/${p.id}/folders/link"><input type="hidden" name="folder" value="${esc(g.folder)}"><button class="link small" title="A link that opens only this folder">Share this folder</button></form>`}
         <form method="post" action="/projects/${p.id}/folders/remove" class="folder-remove"${confirmAttr(g.items.length
           ? `Remove the folder “${g.label}”? Its ${g.items.length} file${g.items.length === 1 ? '' : 's'} stay in the delivery and move up a level.`
@@ -478,7 +488,7 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
       <label class="bulk-move">Move to
         <select name="folder">
           <option value="">No folder</option>
-          ${[...new Set([...byFolder(assets, folders).map((g) => g.folder).filter(Boolean)])].map((f) => `<option value="${esc(f)}">${esc(f.split('/').join(' / '))}</option>`).join('')}
+          ${[...new Set([...byFolder(assets, folders, folderOrder).map((g) => g.folder).filter(Boolean)])].map((f) => `<option value="${esc(f)}">${esc(f.split('/').join(' / '))}</option>`).join('')}
           <option value="__new">New folder…</option>
         </select>
       </label>
@@ -684,15 +694,15 @@ function deliveryHeader({ studio, links, cta }) {
 </header>`;
 }
 
-function deliveryPage({ project: p, assets, studio, host = '' }) {
+function deliveryPage({ project: p, assets, studio, host = '', folderOrder = [] }) {
   const base = `/d/${p.share_token}`;
   const canDl = !!p.allow_download && assets.length > 0;
   // A video can be the cover even before it has a poster frame: the hero just plays it.
   const usable = (a) => a.thumb_name || a.kind === 'video';
   const cover = assets.find((a) => a.id === p.cover_asset_id && usable(a)) || assets.find((a) => a.thumb_name) || assets.find(usable);
   const isVisual = (a) => a.kind === 'image' || a.kind === 'video';
-  const visualGroups = byFolder(assets.filter(isVisual));
-  const otherGroups = byFolder(assets.filter((a) => !isVisual(a)));
+  const visualGroups = byFolder(assets.filter(isVisual), [], folderOrder);
+  const otherGroups = byFolder(assets.filter((a) => !isVisual(a)), [], folderOrder);
   const visual = visualGroups.flatMap((g) => g.items);
   const folderZip = (g) => (canDl && g.folder ? `<a class="dl-folder-dl" href="${base}/zip?folder=${encodeURIComponent(g.folder)}">${DL_ICON}<span>Download folder</span></a>` : '');
   const folderHead = (g, tag) => (g.folder ? `<${tag} class="dl-folder">${FOLDER_ICON}<b>${esc(g.label)}</b><em>${g.items.length}</em>${folderZip(g)}</${tag}>` : '');
@@ -799,4 +809,4 @@ ${canDl ? `<div class="dl-selbar" id="dl-selbar" aria-live="polite">
 <script>window.CF_ITEMS = ${JSON.stringify(items).replace(/</g, '\\u003c')};</script>` });
 }
 
-module.exports = { landing, authForm, dashboard, projectPage, connectPage, unlockPage, deliveryPage, messagePage, pricingPage, fmtSize, TYPES };
+module.exports = { byFolder, landing, authForm, dashboard, projectPage, connectPage, unlockPage, deliveryPage, messagePage, pricingPage, fmtSize, TYPES };
