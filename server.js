@@ -261,10 +261,11 @@ app.get('/projects/:id', requireUser, ownProject, (req, res) => {
   const stats = db.prepare(`SELECT
       SUM(type = 'view') AS views, SUM(type IN ('download', 'zip')) AS downloads, MAX(created_at) AS last
     FROM events WHERE project_id = ?`).get(p.id);
-  const rows = db.prepare('SELECT path, collapsed FROM folders WHERE project_id = ? ORDER BY id').all(p.id);
+  const rows = db.prepare('SELECT path, collapsed, share_token FROM folders WHERE project_id = ? ORDER BY id').all(p.id);
   const folders = rows.map((r) => r.path).filter(Boolean);
   const collapsed = rows.filter((r) => r.collapsed).map((r) => r.path);
-  res.send(V.projectPage({ user: req.user, project: p, assets, folders, collapsed, saved: req.query.saved, notice: req.query.notice,
+  const folderLinks = Object.fromEntries(rows.filter((r) => r.share_token && r.path).map((r) => [r.path, r.share_token]));
+  res.send(V.projectPage({ user: req.user, project: p, assets, folders, collapsed, folderLinks, saved: req.query.saved, notice: req.query.notice,
     stats: { views: stats.views || 0, downloads: stats.downloads || 0, last: stats.last },
     origin: originOf(req), direct: storage.enabled, storageMissing: storage.partlySet, usage: usage(req.user) }));
 });
@@ -338,6 +339,21 @@ app.post('/projects/:id/folders/collapse', requireUser, ownProject, (req, res) =
     ON CONFLICT (project_id, path) DO UPDATE SET collapsed = excluded.collapsed`)
     .run(req.project.id, folder, req.body?.collapsed === '1' ? 1 : 0);
   res.json({ ok: true });
+});
+
+// A folder's own link: the client who gets it sees and downloads only that folder (and the folders
+// inside it). It follows the delivery's password, expiry and download settings. on=0 turns it off.
+app.post('/projects/:id/folders/link', requireUser, ownProject, (req, res) => {
+  const folder = cleanFolder(req.body?.folder);
+  if (!folder) return back(req, res);
+  const label = `“${folder.split('/').join(' / ')}”`;
+  if (req.body?.on === '0') {
+    db.prepare('UPDATE folders SET share_token = NULL WHERE project_id = ? AND path = ?').run(req.project.id, folder);
+    return back(req, res, `The link for ${label} is off. Anyone who had it can no longer open it.`);
+  }
+  saveFolder.run(req.project.id, folder);
+  db.prepare('UPDATE folders SET share_token = COALESCE(share_token, ?) WHERE project_id = ? AND path = ?').run(token(16), req.project.id, folder);
+  back(req, res, `Link for ${label} is ready. Whoever opens it only sees that folder.`);
 });
 
 // Removing a folder keeps its files: they move up into the folder it was in (or out of folders).
@@ -617,8 +633,21 @@ app.use('/mcp', mcpRouter({
 // ---------- client: delivery ----------
 const unlockValue = (p) => crypto.createHash('sha256').update(`${p.id}:${p.password_hash}`).digest('hex').slice(0, 32);
 
+// A delivery link opens the whole delivery; a folder link opens the same delivery limited to one
+// folder (req.scope). Then the page, thumbnails, files and zips only ever reach files in that folder.
 function loadDelivery(req, res, next) {
-  const p = db.prepare('SELECT p.*, u.name AS owner_name, u.studio AS owner_studio FROM projects p JOIN users u ON u.id = p.user_id WHERE p.share_token = ?').get(req.params.token);
+  const q = 'SELECT p.*, u.name AS owner_name, u.studio AS owner_studio FROM projects p JOIN users u ON u.id = p.user_id';
+  let p = db.prepare(`${q} WHERE p.share_token = ?`).get(req.params.token);
+  req.scope = null;
+  if (!p) {
+    const f = db.prepare('SELECT project_id, path FROM folders WHERE share_token = ?').get(req.params.token);
+    const whole = f && db.prepare(`${q} WHERE p.id = ?`).get(f.project_id);
+    if (whole) {
+      req.scope = f.path;
+      // Links and forms on the client's pages keep using this folder link, never the delivery's own.
+      p = { ...whole, share_token: req.params.token, title: `${whole.title} · ${f.path.split('/').pop()}` };
+    }
+  }
   if (!p) return res.status(404).send(V.messagePage('Link not found', 'This delivery link is invalid or has been replaced.'));
   const isOwner = req.user && req.user.id === p.user_id;
   if (!isOwner && p.expires_at && new Date(`${p.expires_at}T23:59:59Z`) < new Date())
@@ -632,14 +661,23 @@ const requireUnlocked = (req, res, next) => (req.unlocked ? next() : res.status(
 const track = (req, type, assetId = null) => {
   if (!req.isOwner) db.prepare('INSERT INTO events (project_id, asset_id, type) VALUES (?, ?, ?)').run(req.project.id, assetId, type);
 };
-const getAsset = (req) => db.prepare('SELECT * FROM assets WHERE id = ? AND project_id = ?').get(req.params.aid, req.project.id);
+const inScope = (req, a) => !req.scope || a.folder === req.scope || (a.folder || '').startsWith(req.scope + '/');
+const getAsset = (req) => {
+  const a = db.prepare('SELECT * FROM assets WHERE id = ? AND project_id = ?').get(req.params.aid, req.project.id);
+  return a && inScope(req, a) ? a : undefined;
+};
+// The files a link can see. Through a folder link, folders are shown from inside that folder:
+// its own files are loose and "BTS/Raw" under a link for "BTS" shows as "Raw".
+const deliveryAssets = (req) => db.prepare('SELECT * FROM assets WHERE project_id = ? ORDER BY position, id').all(req.project.id)
+  .filter((a) => inScope(req, a))
+  .map((a) => (req.scope ? { ...a, folder: a.folder === req.scope ? null : a.folder.slice(req.scope.length + 1) } : a));
 
 app.get('/d/:token', loadDelivery, (req, res) => {
   const p = req.project;
   const studio = p.owner_studio || p.owner_name;
   if (!req.unlocked) return res.send(V.unlockPage({ project: p, studio }));
   track(req, 'view');
-  const assets = db.prepare('SELECT * FROM assets WHERE project_id = ? ORDER BY position, id').all(p.id);
+  const assets = deliveryAssets(req);
   res.send(V.deliveryPage({ project: p, assets, studio, host: req.get('host') }));
 });
 
@@ -702,7 +740,7 @@ app.get('/d/:token/download/:aid', loadDelivery, requireUnlocked, async (req, re
 app.get('/d/:token/zip', loadDelivery, requireUnlocked, (req, res) => {
   const p = req.project;
   if (!p.allow_download && !req.isOwner) return res.sendStatus(403);
-  let assets = db.prepare('SELECT * FROM assets WHERE project_id = ? ORDER BY position, id').all(p.id);
+  let assets = deliveryAssets(req);
   // ?ids=1,2,3 zips only the files the client picked in the gallery.
   const ids = new Set(String(req.query.ids || '').split(',').map(Number).filter(Boolean));
   if (ids.size) assets = assets.filter((a) => ids.has(a.id));

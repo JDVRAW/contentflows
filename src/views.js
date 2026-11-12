@@ -392,7 +392,7 @@ function byFolder(assets, keep = []) {
 const CHEVRON = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const FOLDER_ICON = '<svg class="folder-ico" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2.2h8.4A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>';
 
-function projectPage({ user, project: p, assets, folders = [], collapsed = [], stats, origin, saved, notice, direct, storageMissing, usage }) {
+function projectPage({ user, project: p, assets, folders = [], collapsed = [], folderLinks = {}, stats, origin, saved, notice, direct, storageMissing, usage }) {
   const link = `${origin}/d/${p.share_token}`;
   const left = usage && usage.plan.limit !== Infinity ? usage.plan.limit - usage.used : null;
   return layout({ title: p.title, user, current: '/dashboard', scripts: ['/static/spiral.js', '/static/upload.js', '/static/files.js'], body: `
@@ -448,10 +448,18 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], s
         <button type="button" class="fold" aria-expanded="${shut ? 'false' : 'true'}" aria-label="${shut ? 'Open' : 'Close'} ${esc(g.label || 'No folder')}" title="Open or close this folder">${CHEVRON}</button>
         ${g.items.length ? `<input type="checkbox" class="pick-group" aria-label="Select every file in ${esc(g.label || 'No folder')}">` : ''}
         ${g.folder ? FOLDER_ICON : ''}<b class="fold-name">${esc(g.label || 'No folder')}</b> <span class="muted">${g.items.length}</span>
-        ${g.folder ? `<form method="post" action="/projects/${p.id}/folders/remove" class="folder-remove"${confirmAttr(g.items.length
+        ${g.folder ? `<div class="folder-actions">
+        ${folderLinks[g.folder] ? '' : `<form method="post" action="/projects/${p.id}/folders/link"><input type="hidden" name="folder" value="${esc(g.folder)}"><button class="link small" title="A link that opens only this folder">Share this folder</button></form>`}
+        <form method="post" action="/projects/${p.id}/folders/remove" class="folder-remove"${confirmAttr(g.items.length
           ? `Remove the folder “${g.label}”? Its ${g.items.length} file${g.items.length === 1 ? '' : 's'} stay in the delivery and move up a level.`
-          : `Remove the empty folder “${g.label}”?`)}><input type="hidden" name="folder" value="${esc(g.folder)}"><button class="link small">Remove folder</button></form>` : ''}
+          : `Remove the empty folder “${g.label}”?`)}><input type="hidden" name="folder" value="${esc(g.folder)}"><button class="link small">Remove folder</button></form></div>` : ''}
       </div>` : ''}
+      ${g.folder && folderLinks[g.folder] ? (() => { const id = `folder-link-${esc(folderLinks[g.folder])}`; return `<div class="folder-link">
+        <span class="small muted">Folder link · only shows this folder</span>
+        <div class="copy"><input readonly id="${id}" value="${esc(`${origin}/d/${folderLinks[g.folder]}`)}"><button class="btn small" type="button" data-copy="#${id}">Copy</button></div>
+        <a class="link small" href="/d/${esc(folderLinks[g.folder])}" target="_blank">Preview</a>
+        <form method="post" action="/projects/${p.id}/folders/link"${confirmAttr(`Turn off the link for “${g.label}”? Anyone who has it will no longer be able to open it.`)}><input type="hidden" name="folder" value="${esc(g.folder)}"><input type="hidden" name="on" value="0"><button class="link small danger">Turn off link</button></form>
+      </div>`; })() : ''}
       ${g.items.length ? `<div class="asset-grid">${g.items.map((a) => `
       <div class="asset" data-id="${a.id}" draggable="true">
         <label class="pick" title="Select"><input type="checkbox" name="ids" value="${a.id}" form="bulk" aria-label="Select ${esc(a.original_name)}"></label>
