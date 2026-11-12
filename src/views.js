@@ -28,7 +28,8 @@ const planSize = (n) => fmtSize(n).replace(/\.0 /, ' ');
 const fmtDate = (d) => d ? new Date(d.replace(' ', 'T') + (d.length <= 10 ? '' : 'Z'))
   .toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
 
-const TYPES = { photoshoot: 'Photoshoot', music_video: 'Music video', commercial: 'Commercial', film: 'Film', podcast: 'Podcast', project: 'Final project' };
+const TYPES = { photoshoot: 'Photoshoot', personal_branding: 'Personal Branding Shoot', music_video: 'Music video', commercial: 'Commercial',
+  commercial_ad: 'Commercial AD', campaign: 'Campaign', brand_kit: 'Brand Kit', film: 'Film', podcast: 'Podcast', project: 'Final project' };
 
 // Marketing header adapted from Antimetal (via Details): logo left, centred links with a
 // sliding dot under the hovered link, a two-column mega-menu on "Product", Log in + CTA right.
