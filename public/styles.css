@@ -35,7 +35,7 @@ label.check { display: flex; gap: 10px; align-items: center; }
 label.check input { width: auto; margin: 0; }
 .stack { display: flex; flex-direction: column; }
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.row.end { display: flex; justify-content: flex-end; gap: 10px; }
+.row.form-end { display: flex; justify-content: flex-end; gap: 10px; }
 .error { color: var(--danger); background: rgba(255,122,107,.08); padding: 10px 12px; border-radius: 10px; }
 .ok { color: var(--ok); }
 
