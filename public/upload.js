@@ -27,8 +27,21 @@
   // The folder each file came from ("BTS" or "BTS/Raw"), so the delivery keeps the uploader's folders.
   const folderOf = new WeakMap();
 
+  // A dropped connection or a server that's busy or restarting is worth waiting out: these get
+  // a few more tries, a little further apart each time, before the file is marked as failed.
+  const TRANSIENT = new Set([0, 408, 429, 502, 503, 504]);
+  async function retrying(job, tries = 5) {
+    for (let attempt = 1; ; attempt++) {
+      try { return await job(); } catch (e) {
+        if (!e.transient || attempt >= tries) throw e;
+        await sleep(2000 * 2 ** (attempt - 1)); // 2, 4, 8, 16 s
+      }
+    }
+  }
+
   // Classic upload: the file goes to this server in one request.
-  function sendForm(file, progress) {
+  const sendForm = (file, progress) => retrying(() => sendFormOnce(file, progress), 3);
+  function sendFormOnce(file, progress) {
     const fd = new FormData();
     if (folderOf.get(file)) fd.append('folder', folderOf.get(file)); // before the file, so the server has it when the file arrives
     fd.append('files', file);
@@ -41,23 +54,28 @@
       xhr.onloadend = () => {
         const body = xhr.response;
         if (xhr.status === 200 && body && body.ok && body.files && body.files.length > 0) return resolve(body);
-        reject(fail((body && body.error) || STATUS[xhr.status] || `Upload failed (error ${xhr.status}).`, false, body && body.upgrade));
+        reject(Object.assign(fail((body && body.error) || STATUS[xhr.status] || `Upload failed (error ${xhr.status}).`, false, body && body.upgrade),
+          { transient: TRANSIENT.has(xhr.status) }));
       };
       xhr.send(fd);
     });
   }
 
   // Direct upload: the file goes straight to cloud storage in parts; this server only signs the parts.
-  async function api(step, body) {
+  const api = (step, body) => retrying(() => apiOnce(step, body));
+  async function apiOnce(step, body) {
     let r, j = null;
     try {
       r = await fetch(`/projects/${pid}/uploads/${step}`, {
         method: 'POST', credentials: 'same-origin', body: JSON.stringify(body),
         headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
       });
-    } catch (e) { throw fail(STATUS[0]); }
+    } catch (e) { throw Object.assign(fail(STATUS[0]), { transient: true }); }
     try { j = await r.json(); } catch (e) {}
-    if (!r.ok || !j || !j.ok) throw fail((j && j.error) || STATUS[r.status] || `Upload failed (error ${r.status}).`, r.status < 500, j && j.upgrade);
+    if (!r.ok || !j || !j.ok) {
+      throw Object.assign(fail((j && j.error) || STATUS[r.status] || `Upload failed (error ${r.status}).`, r.status < 500, j && j.upgrade),
+        { transient: TRANSIENT.has(r.status) });
+    }
     return j;
   }
 
@@ -113,9 +131,9 @@
           } catch (e) {
             loaded[n] = 0; report();
             if (stop) return;
-            if (e.fatal || attempt >= 4) { stop = true; throw e; }
+            if (e.fatal || attempt >= 6) { stop = true; throw e; }
             delete batches[Math.floor((n - 1) / 20)]; // re-sign in case the link expired
-            await sleep(1500 * 2 ** attempt);
+            await sleep(1500 * 2 ** Math.min(attempt, 4));
           }
         }
       }
