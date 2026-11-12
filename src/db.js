@@ -70,6 +70,18 @@ if (!db.prepare('PRAGMA table_info(assets)').all().some((c) => c.name === 'stora
 if (!db.prepare('PRAGMA table_info(assets)').all().some((c) => c.name === 'folder'))
   db.exec('ALTER TABLE assets ADD COLUMN folder TEXT');
 
+// Folders a creator made by hand on the project page. A folder with files in it also shows
+// without a row here (it comes from the files' own folder); this keeps empty ones around.
+db.exec(`
+CREATE TABLE IF NOT EXISTS folders (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (project_id, path)
+);
+`);
+
 // Storage plan and Stripe subscription, per creator.
 const userCols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
 for (const [name, type] of [['plan', "TEXT NOT NULL DEFAULT 'free'"], ['plan_interval', 'TEXT'], ['plan_status', 'TEXT'],

@@ -809,3 +809,45 @@ html.am-lock, html.am-lock body { overflow: hidden; }
 .connect .how-card ol { padding-left: 18px; margin: 0; line-height: 1.6; }
 .connect pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; background: rgba(0,0,0,.05); padding: 10px 12px; border-radius: 8px; margin: 0; }
 @media (max-width: 860px) { .connect .how-grid { grid-template-columns: 1fr; } .connect .key-row { flex-wrap: wrap; } }
+
+/* ---------- project page: folders, picking several files, moving and deleting ---------- */
+#files { scroll-margin-top: 90px; }
+.files-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.files-head h2 { margin: 0; }
+.files-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.new-folder { display: flex; gap: 8px; align-items: center; }
+.new-folder input { width: 190px; padding: 7px 10px; font-size: 13px; }
+.new-folder .folder-ico { opacity: 1; }
+.files-notice { margin: 4px 0 8px; }
+.file-group { border-radius: 14px; transition: background .15s, box-shadow .15s; }
+.file-group .folder-head { margin: 24px 0 12px; }
+.file-group:first-of-type .folder-head { margin-top: 8px; }
+.folder-head .pick-group { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.folder-head .folder-remove { margin-left: auto; }
+.folder-empty { border: 1.5px dashed var(--line); border-radius: 12px; padding: 22px; text-align: center; color: var(--muted); font-size: 14px; }
+.file-group.drop-on { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: 0 0 0 2px var(--accent); }
+.asset { position: relative; transition: border-color .15s, opacity .15s, transform .15s; }
+.asset[draggable="true"] { cursor: grab; }
+.asset.dragging { opacity: .45; }
+.asset.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.asset .pick { position: absolute; margin: 0; top: 8px; left: 8px; z-index: 2; width: 26px; height: 26px; display: grid; place-items: center;
+  background: rgba(0,0,0,.55); border-radius: 7px; cursor: pointer; opacity: 0; transition: opacity .15s; }
+.asset .pick input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.asset:hover .pick, .asset .pick:focus-within, .asset.picked .pick, .picking .asset .pick { opacity: 1; }
+@media (hover: none) { .asset .pick { opacity: 1; } }
+.asset.picked .badge.left { left: 40px; }
+.bulk-bar { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 50; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  justify-content: center; max-width: calc(100% - 32px); padding: 10px 14px; background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,.45); }
+.bulk-bar[hidden] { display: none; }
+.bulk-count { font: 500 14px var(--geist); white-space: nowrap; }
+.bulk-move { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; color: var(--muted); white-space: nowrap; }
+.bulk-move select { width: auto; max-width: 200px; margin: 0; padding: 6px 10px; font-size: 13px; }
+.bulk-bar input[name="new_folder"] { width: 160px; padding: 6px 10px; font-size: 13px; }
+@media (max-width: 760px) {
+  .new-folder input { width: 150px; }
+  .bulk-bar { left: 12px; right: 12px; bottom: 12px; transform: none; max-width: none; gap: 8px 10px; padding: 10px 12px; }
+  .bulk-count { flex-basis: 100%; text-align: center; }
+  .folder-head .folder-remove { margin-left: 0; }
+}
+#files.picking { padding-bottom: 110px; }
