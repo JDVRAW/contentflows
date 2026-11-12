@@ -123,4 +123,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
 CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
 `);
 
+// The last time the delivery link was emailed from the app, and to whom (shown on the delivery's page).
+const projectCols = new Set(db.prepare('PRAGMA table_info(projects)').all().map((c) => c.name));
+for (const name of ['emailed_to', 'emailed_at']) if (!projectCols.has(name)) db.exec(`ALTER TABLE projects ADD COLUMN ${name} TEXT`);
+
 module.exports = { db, DATA_DIR };

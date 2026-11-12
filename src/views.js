@@ -396,7 +396,31 @@ function byFolder(assets, keep = [], order = []) {
 const CHEVRON = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const FOLDER_ICON = '<svg class="folder-ico" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2.2h8.4A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>';
 
-function projectPage({ user, project: p, assets, folders = [], collapsed = [], folderLinks = {}, folderOrder = [], stats, origin, saved, notice, direct, storageMissing, usage }) {
+// "Email it to the client" under the delivery link: sends the link from the app, branded with the studio's name or logo.
+const MAIL_ERRORS = {
+  off: 'Email is not set up on this site yet.',
+  empty: 'Add the client\'s email address.',
+  invalid: 'One of those doesn\'t look like an email address.',
+  many: 'Send to 5 addresses at most at a time.',
+  limit: 'You\'ve reached today\'s email limit. Copy the link and send it yourself, or try again tomorrow.',
+  failed: 'The email didn\'t go out. Try again in a minute, or copy the link and send it yourself.',
+};
+function mailBox(p, mail) {
+  const last = p.emailed_at ? `Last emailed to ${esc(p.emailed_to)} on ${fmtDate(p.emailed_at)}` : '';
+  const status = mail.sent ? `<p class="ok small">Sent. ${esc(p.emailed_to || '')} will get the link in a moment.</p>`
+    : mail.error ? `<p class="q-error">${esc(MAIL_ERRORS[mail.error] || MAIL_ERRORS.failed)}</p>`
+    : last ? `<p class="muted small">${last}</p>` : '';
+  if (!mail.enabled) return `<div class="share-mail is-off"><p class="muted small">Sending the link by email turns on once the site's email service is set up${mail.partlySet ? ` (missing ${esc(mail.partlySet.join(', '))})` : ''}.</p>${status}</div>`;
+  return `<form class="share-mail" method="post" action="/projects/${p.id}/email">
+    <label for="mail-to" class="small">Email the link to your client</label>
+    <div class="copy"><input id="mail-to" name="to" type="text" inputmode="email" autocomplete="off" value="${esc(p.client_email || '')}" placeholder="client@email.com" required aria-describedby="mail-hint">
+    <button class="btn">${p.emailed_at ? 'Send again' : 'Send'}</button></div>
+    <p class="muted small" id="mail-hint">Your brand name and message go with it. Separate up to ${mail.maxTo || 5} addresses with commas. Replies come to you.${p.password_hash ? ' The password is not included.' : ''}</p>
+    ${status}
+  </form>`;
+}
+
+function projectPage({ user, project: p, assets, folders = [], collapsed = [], folderLinks = {}, folderOrder = [], stats, origin, saved, notice, mail = {}, direct, storageMissing, usage }) {
   const link = `${origin}/d/${p.share_token}`;
   const left = usage && usage.plan.limit !== Infinity ? usage.plan.limit - usage.used : null;
   return layout({ title: p.title, user, current: '/dashboard', scripts: ['/static/spiral.js', '/static/upload.js', '/static/files.js'], body: `
@@ -406,10 +430,11 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
   <p class="muted">${esc(p.client_name || 'No client set')}${p.client_email ? ` · ${esc(p.client_email)}` : ''}</p></div>
   <a class="btn ghost" href="/d/${p.share_token}" target="_blank">Preview as client</a></div>
 
-  <section class="share">
+  <section class="share" id="share">
     <div><h3>Delivery link</h3><p class="muted small">${p.password_hash ? 'Password protected' : 'Anyone with the link can view'}${p.expires_at ? ` · expires ${fmtDate(p.expires_at)}` : ''}${p.allow_download ? '' : ' · downloads off'}</p></div>
     <div class="copy"><input readonly value="${esc(link)}" id="share-link"><button class="btn" data-copy="#share-link">Copy</button></div>
     <div class="stats"><div><b>${stats.views}</b><span>views</span></div><div><b>${stats.downloads}</b><span>downloads</span></div><div><b>${stats.last ? fmtDate(stats.last) : '—'}</b><span>last activity</span></div></div>
+    ${mailBox(p, mail)}
   </section>
 
   <section>
@@ -866,4 +891,4 @@ ${canDl ? `<div class="dl-selbar" id="dl-selbar" aria-live="polite">
 <script>window.CF_ITEMS = ${JSON.stringify(items).replace(/</g, '\\u003c')};</script>` });
 }
 
-module.exports = { brandingPage, byFolder, landing, authForm, dashboard, projectPage, connectPage, unlockPage, deliveryPage, messagePage, pricingPage, fmtSize, TYPES };
+module.exports = { brandingPage, byFolder, landing, authForm, dashboard, projectPage, connectPage, unlockPage, deliveryPage, messagePage, pricingPage, fmtSize, fmtDate, TYPES };

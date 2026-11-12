@@ -106,6 +106,12 @@ dialog::backdrop { background: rgba(0,0,0,.6); backdrop-filter: blur(4px); }
 .asset-actions { display: flex; gap: 14px; padding: 0 12px 10px; }
 .settings > form { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; }
 .danger-zone { display: flex; gap: 10px; margin-top: 16px; }
+.share-mail { grid-column: 1 / -1; display: grid; gap: 6px; padding-top: 16px; border-top: 1px solid var(--line); }
+.share-mail label { font-weight: 600; margin: 0; }
+.share-mail .copy { max-width: 620px; }
+.share-mail .copy input { flex: 1; font-family: inherit; font-size: 14px; }
+.share-mail p { margin: 0; }
+.share-mail.is-off { padding-top: 14px; }
 
 @media (max-width: 760px) {
   .wrap { padding: 24px 16px 60px; }

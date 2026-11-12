@@ -17,6 +17,7 @@ A delivery platform for creatives. Upload final photoshoots, music videos, comme
 - **Downloads**: single files, a picked selection (`/d/:token/zip?ids=1,2,3`), or "Download all" as a zip
 - **Link controls**: optional password, expiry date, downloads on/off, regenerate link to revoke the old one
 - **Security**: delivery links carry a random 128-bit code; passwords are stored as bcrypt hashes; after 10 wrong passwords from one address, or 30 in total, a delivery or account refuses more tries for 15 minutes. Files in R2 are served through signed links that expire after 6 hours. Only photos, video and audio open in the browser; any other file downloads, and files on the server's disk are sent with a `sandbox` policy, so an uploaded HTML or SVG file can't run as a page
+- **Email the link**: under the delivery link, "Email the link to your client" sends the client a short branded email (the studio's logo on Pro and Studio when it's a PNG, JPG or WebP, otherwise the studio name), with the delivery's title, the personal message, file count and size, expiry, and a "View your files" button. It comes from "Studio via ContentFlows" and replies go to the creator's own email. Up to 5 addresses at a time, each sent separately; the password is never included. Each creator can email 50 addresses a day (`MAIL_DAILY_LIMIT`). Needs `RESEND_API_KEY` and `MAIL_FROM` (see Email below); without them the box says email isn't set up
 - **Tracking**: views and downloads per delivery and per file
 - **AI assistants (MCP)**: creators make an API key under Connect AI and add ContentFlows as a connector in Claude or any MCP app, which can then create deliveries, add files from links and hand back the share link (see below)
 - **Storage plans**: Free (10 GB), Pro ($12/month, 250 GB) and Studio ($29/month, 1 TB), yearly at 10× the monthly price. The limit is the total size of the files a creator keeps, shown as a meter on the dashboard and checked before each upload. Upgrades, plan changes and cancellations go through Stripe
@@ -78,6 +79,9 @@ npm start            # http://localhost:3000
 | `S3_BUCKET` | | Bucket name |
 | `S3_ACCESS_KEY_ID` | | Access key of an API token with object read and write on the bucket |
 | `S3_SECRET_ACCESS_KEY` | | Its secret |
+| `RESEND_API_KEY` | | [Resend](https://resend.com) API key (Sending access is enough). Turns on "Email the link" |
+| `MAIL_FROM` | | Address the emails come from, on a domain verified in Resend, e.g. `deliveries@yourdomain.com` |
+| `MAIL_DAILY_LIMIT` | `50` | Addresses each creator can email per 24 hours |
 | `S3_REGION` | `auto` | Region (R2 uses `auto`) |
 | `S3_FORCE_PATH_STYLE` | | Set to `1` for services that need path-style URLs (MinIO, local test servers) |
 | `STRIPE_SECRET_KEY` | | Stripe secret key (`sk_live_…` or `sk_test_…`). Turns on paid plans |
@@ -136,6 +140,17 @@ Plans and prices live in `src/plans.js`. The matching Stripe products and prices
 
 Use test-mode keys (`sk_test_…`) first and pay with the card `4242 4242 4242 4242`. Without `STRIPE_SECRET_KEY` the plans page still shows, and paid plans say "Available soon".
 
+### Email with Resend
+
+"Email the link" sends through [Resend](https://resend.com) (free for 3,000 emails a month, 100 a day).
+
+1. Sign up at resend.com, open **Domains → Add domain** and add the domain the site runs on (or a subdomain such as `mail.yourdomain.com`).
+2. Add the DNS records Resend shows (SPF, DKIM and the MX for bounces) where your domain's DNS lives, and wait for the domain to show **Verified**. Until it is, Resend only delivers to your own account's address.
+3. Under **API Keys**, create a key with **Sending access**.
+4. In Railway → **Variables**, add `RESEND_API_KEY` and `MAIL_FROM` (e.g. `deliveries@yourdomain.com`). Railway redeploys on its own.
+
+Emails go out as "Studio name via ContentFlows <deliveries@yourdomain.com>" with Reply-To set to the creator, so client replies land in the creator's inbox.
+
 ## Structure
 
 ```
@@ -145,6 +160,7 @@ src/media.js     file type detection and ffmpeg thumbnails
 src/storage.js   object storage (R2/S3): multipart uploads, signed links
 src/plans.js     storage plans, prices and limits
 src/billing.js   Stripe: checkout, plan changes, cancel, billing portal, webhook
+src/mail.js      Resend email and the branded delivery email
 src/views.js     server-rendered HTML
 public/          styles, nav menu, upload client, gallery lightbox, landing hero image
 ```
@@ -153,6 +169,6 @@ public/          styles, nav menu, upload client, gallery lightbox, landing hero
 
 - Video transcoding to HLS for adaptive streaming
 - Client favorites, comments and approval
-- Email notifications when a delivery is sent or downloaded
+- Email the creator when a client opens or downloads a delivery
 - More branding (colors, custom domain)
 - Payments to unlock downloads
