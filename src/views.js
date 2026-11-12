@@ -705,8 +705,9 @@ function deliveryPage({ project: p, assets, studio, host = '', folderOrder = [] 
   const otherGroups = byFolder(assets.filter((a) => !isVisual(a)), [], folderOrder);
   const visual = visualGroups.flatMap((g) => g.items);
   const folderZip = (g) => (canDl && g.folder ? `<a class="dl-folder-dl" href="${base}/zip?folder=${encodeURIComponent(g.folder)}">${DL_ICON}<span>Download folder</span></a>` : '');
-  // The arrow (or the folder's name) folds a folder shut; the client's browser remembers it.
-  const folderHead = (g, tag) => (g.folder ? `<${tag} class="dl-folder"><button type="button" class="dl-fold" aria-expanded="true" aria-label="Close ${esc(g.label)}" title="Open or close this folder">${CHEVRON}</button>${FOLDER_ICON}<b class="dl-fold-name">${esc(g.label)}</b><em>${g.items.length}</em>${folderZip(g)}</${tag}>` : '');
+  // Folders start closed so the client sees them all at once and opens the ones they want with the
+  // arrow (or the folder's name). Their browser remembers which ones they opened.
+  const folderHead = (g, tag) => (g.folder ? `<${tag} class="dl-folder"><button type="button" class="dl-fold" aria-expanded="false" aria-label="Open ${esc(g.label)}" title="Open or close this folder">${CHEVRON}</button>${FOLDER_ICON}<b class="dl-fold-name">${esc(g.label)}</b><em>${g.items.length}</em>${folderZip(g)}</${tag}>` : '');
   const photos = visual.filter((a) => a.kind === 'image').length;
   const films = visual.length - photos;
   const others = otherGroups.flatMap((g) => g.items);
@@ -756,7 +757,7 @@ ${visual.length ? `<section class="lp lp-light dl-gallery" id="work" data-header
         <button type="button" class="dl-link" aria-label="Copy the link to this delivery"><span class="dl-link-text">${esc(host + base)}</span><span class="dl-link-tip" aria-hidden="true">Copy</span></button>
         ${filters}
       </div>
-      ${(() => { let i = 0; return visualGroups.map((g) => `<div class="dl-group" data-folder="${esc(g.folder)}">${folderHead(g, 'div')}<div class="dl-grid">${g.items.map((a) => `
+      ${(() => { let i = 0; return visualGroups.map((g) => `<div class="dl-group${g.folder ? ' collapsed' : ''}" data-folder="${esc(g.folder)}">${folderHead(g, 'div')}<div class="dl-grid">${g.items.map((a) => `
         <figure class="dl-tile ${a.kind}" data-index="${i++}" data-id="${a.id}" data-kind="${a.kind}" data-size="${a.size}" tabindex="0" aria-label="Open ${esc(a.original_name)}">
           ${a.thumb_name ? `<img loading="lazy" src="${base}/thumb/${a.id}" alt="">` : `<div class="dl-noimg">${ext(a.original_name)}</div>`}
           ${a.kind === 'video' ? '<span class="dl-play" aria-hidden="true"></span>' : ''}
@@ -770,7 +771,7 @@ ${visual.length ? `<section class="lp lp-light dl-gallery" id="work" data-header
 ${others.length ? `<section class="lp lp-light dl-files" id="files" data-header-theme="dark">
   <div class="lp-inner">
     <p class="lp-label">(${visual.length ? '02' : '01'}) Files</p>
-    ${otherGroups.map((g) => `<div class="dl-fgroup" data-folder="${esc(g.folder)}">${folderHead(g, 'div')}<ul class="dl-list">${g.items.map((a) => `
+    ${otherGroups.map((g) => `<div class="dl-fgroup${g.folder ? ' collapsed' : ''}" data-folder="${esc(g.folder)}">${folderHead(g, 'div')}<ul class="dl-list">${g.items.map((a) => `
       <li class="dl-file">
         <span class="dl-ext">${ext(a.original_name)}</span>
         <div class="dl-meta"><b>${esc(a.original_name)}</b><small>${a.kind === 'audio' ? 'Audio' : 'File'} · ${fmtSize(a.size)}</small></div>
