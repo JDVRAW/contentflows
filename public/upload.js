@@ -129,6 +129,37 @@
     }
   }
 
+  // A folder dropped in a browser that can't open it, or a file that was moved or deleted after it was
+  // picked, can't be read: catch that here instead of failing later as a network error.
+  const readable = (file) => file.slice(0, 1).arrayBuffer().catch(() => {
+    throw fail(`“${file.name}” can’t be read. If it’s a folder, open it and drop the files inside instead.`, true);
+  });
+
+  // Dropped folders arrive as File objects that can't be read, so open them and take the files inside.
+  // Entries must be taken during the drop event, before the browser clears the drop data.
+  async function dropped(dt) {
+    const files = [...dt.files];
+    const entries = [...(dt.items || [])].filter((i) => i.kind === 'file').map((i) => i.webkitGetAsEntry?.());
+    if (!entries.length || entries.some((e) => !e)) return files;
+    const list = (dir) => new Promise((resolve, reject) => {
+      const reader = dir.createReader(), all = [];
+      const more = () => reader.readEntries((batch) => (batch.length ? (all.push(...batch), more()) : resolve(all)), reject);
+      more();
+    });
+    const out = [];
+    const walk = async (e, nested) => {
+      if (nested && e.name.startsWith('.')) return; // .DS_Store and other hidden files inside folders
+      if (e.isFile) out.push(await new Promise((resolve, reject) => e.file(resolve, reject)));
+      else if (e.isDirectory) for (const child of await list(e)) await walk(child, true);
+    };
+    try {
+      for (const e of entries) await walk(e, false);
+      return out;
+    } catch (err) {
+      return files;
+    }
+  }
+
   const progress = new Map();
   function send(file) {
     const row = document.createElement('div');
@@ -140,7 +171,7 @@
     queue.appendChild(row);
     const bar = row.querySelector('i');
     const onProgress = (f) => { bar.style.width = Math.min(100, f * 100) + '%'; progress.set(file, f); };
-    const job = direct ? sendDirect(file, onProgress, () => { size.textContent = 'Saving'; }) : sendForm(file, onProgress);
+    const job = readable(file).then(() => (direct ? sendDirect(file, onProgress, () => { size.textContent = 'Saving'; }) : sendForm(file, onProgress)));
     return job.then(() => {
       row.classList.add('done');
       size.textContent = fmt(file.size);
@@ -215,5 +246,5 @@
   drop.addEventListener('dragenter', (e) => { e.preventDefault(); if (depth++ === 0) over(true); });
   drop.addEventListener('dragover', (e) => e.preventDefault());
   drop.addEventListener('dragleave', () => { if (--depth <= 0) { depth = 0; over(false); } });
-  drop.addEventListener('drop', (e) => { e.preventDefault(); depth = 0; over(false); sendAll(e.dataTransfer.files); });
+  drop.addEventListener('drop', (e) => { e.preventDefault(); depth = 0; over(false); dropped(e.dataTransfer).then(sendAll); });
 })();
