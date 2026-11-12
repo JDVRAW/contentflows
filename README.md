@@ -5,7 +5,7 @@ A delivery platform for creatives. Upload final photoshoots, music videos, comme
 ## Features
 
 - **Creator accounts** with a studio name shown to clients
-- **Deliveries** (photoshoot, music video, commercial, film, final project) with client name, email and a personal message
+- **Deliveries** (photoshoot, personal branding shoot, music video, commercial, commercial AD, campaign, brand kit, film, podcast, final project) with client name, email and a personal message
 - **Drag-and-drop uploads** with per-file progress, any file type, large files supported (default limit 10 GB per file). With object storage set up, files go straight from the browser to the bucket in parts, so big videos never pass through the server
 - **Organizing files**: on a delivery's page the creator can make folders, tick several files (or a whole folder, shift-click for a range) and move them to any folder (or a new one) from the bar that appears, or drag files onto a folder. The same bar deletes just the ticked files. Removing a folder keeps its files and moves them up a level. Each folder has an arrow to fold it shut (or "Close all"), and the page remembers which ones are closed
 - **Folding folders on the client page**: folders start closed so the client sees them all at once, then opens the ones they want (gallery and files list) with the arrow or the name; their browser remembers which ones they opened
