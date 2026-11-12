@@ -823,7 +823,7 @@ html.am-lock, html.am-lock body { overflow: hidden; }
 .file-group .folder-head { margin: 24px 0 12px; }
 .file-group:first-of-type .folder-head { margin-top: 8px; }
 .folder-head .pick-group { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
-.folder-head .folder-remove { margin-left: auto; }
+.folder-head .folder-actions { margin-left: auto; display: flex; gap: 16px; align-items: center; }
 .folder-empty { border: 1.5px dashed var(--line); border-radius: 12px; padding: 22px; text-align: center; color: var(--muted); font-size: 14px; }
 .file-group.drop-on { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: 0 0 0 2px var(--accent); }
 .asset { position: relative; transition: border-color .15s, opacity .15s, transform .15s; }
@@ -848,7 +848,8 @@ html.am-lock, html.am-lock body { overflow: hidden; }
   .new-folder input { width: 150px; }
   .bulk-bar { left: 12px; right: 12px; bottom: 12px; transform: none; max-width: none; gap: 8px 10px; padding: 10px 12px; }
   .bulk-count { flex-basis: 100%; text-align: center; }
-  .folder-head .folder-remove { margin-left: 0; }
+  .folder-head { flex-wrap: wrap; }
+  .folder-head .folder-actions { margin-left: 0; flex-basis: 100%; padding-left: 30px; }
 }
 #files.picking { padding-bottom: 110px; }
 
@@ -861,3 +862,11 @@ html.am-lock, html.am-lock body { overflow: hidden; }
 .file-group.collapsed .fold svg { transform: rotate(-90deg); }
 .file-group.collapsed > .asset-grid, .file-group.collapsed > .folder-empty { display: none; }
 .file-group.collapsed .folder-head { margin-bottom: 4px; }
+
+/* A folder's own share link */
+.folder-link { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: -4px 0 14px 30px; padding: 10px 12px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.folder-link .copy { display: flex; gap: 8px; flex: 1; min-width: 220px; }
+.folder-link .copy input { flex: 1; margin: 0; padding: 6px 10px; font-size: 13px; }
+.folder-link form { margin: 0; }
+@media (max-width: 760px) { .folder-link { margin-left: 0; } }

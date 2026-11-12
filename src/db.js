@@ -86,6 +86,11 @@ CREATE TABLE IF NOT EXISTS folders (
 if (!db.prepare('PRAGMA table_info(folders)').all().some((c) => c.name === 'collapsed'))
   db.exec('ALTER TABLE folders ADD COLUMN collapsed INTEGER NOT NULL DEFAULT 0');
 
+// A folder's own delivery link: whoever has it sees only that folder (NULL = no link).
+if (!db.prepare('PRAGMA table_info(folders)').all().some((c) => c.name === 'share_token'))
+  db.exec('ALTER TABLE folders ADD COLUMN share_token TEXT');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_share ON folders(share_token)');
+
 // Storage plan and Stripe subscription, per creator.
 const userCols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
 for (const [name, type] of [['plan', "TEXT NOT NULL DEFAULT 'free'"], ['plan_interval', 'TEXT'], ['plan_status', 'TEXT'],
