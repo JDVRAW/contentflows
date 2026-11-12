@@ -20,8 +20,24 @@ const reason = (err, stderr) => (String(stderr || '').trim().split('\n').pop() |
 // Generate a JPEG thumbnail (images) or poster frame (videos) with ffmpeg.
 // srcPath is a local file or an http URL (ffmpeg reads only the bytes it needs from it).
 // Resolves to the thumb filename, or null if ffmpeg is missing or fails (the reason is logged).
+// ffmpeg can take hundreds of MB decoding a big photo or video, so only a couple run at once, however
+// many files are being uploaded; the rest wait their turn instead of running the server out of memory.
+const THUMB_SLOTS = Math.max(1, Number(process.env.THUMB_CONCURRENCY) || 2);
+let busy = 0;
+const waiting = [];
 function makeThumb(srcPath, kind, id) {
   if (kind !== 'image' && kind !== 'video') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const run = () => {
+      busy++;
+      runThumb(srcPath, kind, id).then(resolve, (e) => { console.error(`thumbnail failed for asset ${id}: ${e.message}`); resolve(null); })
+        .finally(() => { busy--; if (waiting.length) waiting.shift()(); });
+    };
+    busy < THUMB_SLOTS ? run() : waiting.push(run);
+  });
+}
+
+function runThumb(srcPath, kind, id) {
   const out = `${id}.jpg`;
   const outPath = path.join(DATA_DIR, 'thumbs', out);
   const args = ['-y', '-loglevel', 'error'];

@@ -476,7 +476,15 @@ app.post('/projects/:id/uploads/complete', ...direct, async (req, res) => {
     return res.status(400).json({ ok: false, error: 'The upload finished without all of its parts. Try again.' });
   const name = String(f.b.name || 'file').slice(0, 255);
   const type = String(f.b.type || '').slice(0, 200) || null;
-  const size = await storage.completeUpload(f.key, f.uploadId, parts);
+  // The uploader retries when an answer gets lost on the way back; the file may already be saved.
+  const saved = () => db.prepare('SELECT id, original_name AS name, kind, size FROM assets WHERE project_id = ? AND stored_name = ?').get(req.project.id, f.key);
+  if (saved()) return res.json({ ok: true, files: [saved()] });
+  let size;
+  try { size = await storage.completeUpload(f.key, f.uploadId, parts); } catch (e) {
+    if (e.name === 'NoSuchUpload' && saved()) return res.json({ ok: true, files: [saved()] });
+    throw e;
+  }
+  if (saved()) return res.json({ ok: true, files: [saved()] }); // a retry finished it while this one waited
   reserved.delete(f.uploadId);
   const kind = kindOf(type || '', name);
   const r = insertAsset.run(req.project.id, name, f.key, type, size, kind, 's3', req.project.id);
@@ -688,10 +696,12 @@ app.use((err, req, res, next) => {
 if (require.main === module) {
   try { sweepUnfinishedUploads(); } catch (e) { console.error('cleanup failed', e); }
   console.log(`Files are stored in ${storage.enabled ? `object storage, ${storage.describe}` : storage.describe}`);
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`ContentFlows running on http://localhost:${PORT}`);
     setTimeout(() => backfillThumbs().catch((e) => console.error('backfill', e)), 2000);
     billing.labelOldCustomers().catch((e) => console.error('stripe mode check', e.message));
   });
+  // Node cuts any request after 5 minutes by default, which kills big uploads on slow connections.
+  server.requestTimeout = 2 * 3600 * 1000;
 }
 module.exports = app;
