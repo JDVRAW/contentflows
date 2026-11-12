@@ -691,7 +691,7 @@ const dropLogoFile = (f) => { if (f) fs.rm(path.join(BRAND, path.basename(f)), {
 const brandingPage = (req, extra = {}) => V.brandingPage({ user: req.user, canBrand: canBrand(req.user), ...extra });
 
 app.get('/branding', requireUser, (req, res) => {
-  res.send(brandingPage(req, { notice: { saved: 'Studio name saved.', logo: 'Logo saved. Your deliveries show it now.', removed: 'Logo removed.' }[req.query.notice] }));
+  res.send(brandingPage(req, { notice: { saved: 'Brand/Studio name saved.', logo: 'Logo saved. Your deliveries show it now.', removed: 'Logo removed.' }[req.query.notice] }));
 });
 app.post('/branding', requireUser, (req, res) => {
   const studio = String(req.body.studio || '').trim().slice(0, 80);

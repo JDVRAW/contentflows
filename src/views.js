@@ -318,7 +318,7 @@ function authForm({ mode, error, values = {}, plan }) {
   ${error ? `<p class="error">${esc(error)}</p>` : ''}
   <form method="post" action="/${mode}">${picked ? `<input type="hidden" name="plan" value="${picked.id}">` : ''}
     ${signup ? `<label>Your name<input name="name" required value="${esc(values.name)}"></label>
-    <label>Studio name <span class="muted">(shown to clients)</span><input name="studio" value="${esc(values.studio)}"></label>` : ''}
+    <label>Brand/Studio name <span class="muted">(shown to clients)</span><input name="studio" value="${esc(values.studio)}"></label>` : ''}
     <label>Email<input type="email" name="email" required value="${esc(values.email)}"></label>
     <label>Password<input type="password" name="password" required minlength="${signup ? 8 : 1}"></label>
     <button class="btn block">${signup ? 'Create account' : 'Log in'}</button>
@@ -565,7 +565,7 @@ function pricingPage({ user, usage, plans, billingOn, subscribed, notice = {} })
       <div class="plan-top"><h2>${p.name}</h2>${p.id === cur ? '<span class="tag">Your plan</span>' : ''}</div>
       <p class="muted small plan-line">${esc(p.line)}</p>
       <p class="plan-space"><b>${planSize(p.limit)}</b> of storage</p>
-      <p class="muted small plan-brand">${p.id === 'free' ? 'Your studio name on deliveries' : 'Your logo on deliveries'}</p>
+      <p class="muted small plan-brand">${p.id === 'free' ? 'Your brand/studio name on deliveries' : 'Your logo on deliveries'}</p>
       <p class="plan-price">${p.month ? `<span class="iv-month"><b>${dollars(p.month)}</b> / month</span><span class="iv-year"><b>${dollars(p.year)}</b> / year <small>${dollars(p.year / 12)} a month</small></span>` : '<b>$0</b> <small>forever</small>'}</p>
       <div class="plan-action"><div class="iv-month">${action(p, 'month')}</div><div class="iv-year">${action(p, 'year')}</div></div>
     </article>`;
@@ -697,7 +697,7 @@ function brandingPage({ user, canBrand, notice, error }) {
   ${notice ? `<p class="notice">${esc(notice)}</p>` : ''}
   ${error ? `<p class="error">${esc(error)}</p>` : ''}
   <section class="settings">
-    <h2>Studio name</h2>
+    <h2>Brand/Studio name</h2>
     <form method="post" action="/branding" class="grid2">
       <label>Shown to clients<input name="studio" maxlength="80" value="${esc(user.studio || '')}" placeholder="${esc(user.name)}"></label>
       <div class="row form-end"><button class="btn">Save name</button></div>
@@ -706,8 +706,8 @@ function brandingPage({ user, canBrand, notice, error }) {
   <section class="settings">
     <div class="brand-head"><h2>Logo</h2>${canBrand ? '' : '<span class="tag">Pro and Studio</span>'}</div>
     ${canBrand
-      ? '<p class="muted small">Your logo replaces your studio name at the top of every delivery. PNG or SVG with a transparent background works best, up to 2 MB. Upload one version, or both so it reads on light and dark backgrounds.</p>'
-      : `<p class="muted">Put your own logo on every delivery with Pro or Studio. On Free, clients see your studio name.</p>
+      ? '<p class="muted small">Your logo replaces your brand/studio name at the top of every delivery. PNG or SVG with a transparent background works best, up to 2 MB. Upload one version, or both so it reads on light and dark backgrounds.</p>'
+      : `<p class="muted">Put your own logo on every delivery with Pro or Studio. On Free, clients see your brand/studio name.</p>
          ${kept ? '<p class="muted small">Your logo is saved and comes back as soon as you upgrade.</p>' : ''}
          <p><a class="btn" href="/pricing">See plans</a></p>`}
     ${canBrand ? `<div class="logo-slots">
