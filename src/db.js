@@ -91,6 +91,10 @@ if (!db.prepare('PRAGMA table_info(folders)').all().some((c) => c.name === 'shar
   db.exec('ALTER TABLE folders ADD COLUMN share_token TEXT');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_share ON folders(share_token)');
 
+// Where a folder sits in the list the creator and client see (NULL = after the ordered ones, in upload order).
+if (!db.prepare('PRAGMA table_info(folders)').all().some((c) => c.name === 'position'))
+  db.exec('ALTER TABLE folders ADD COLUMN position INTEGER');
+
 // Storage plan and Stripe subscription, per creator.
 const userCols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
 for (const [name, type] of [['plan', "TEXT NOT NULL DEFAULT 'free'"], ['plan_interval', 'TEXT'], ['plan_status', 'TEXT'],
