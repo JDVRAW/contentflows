@@ -90,6 +90,9 @@ dialog::backdrop { background: rgba(0,0,0,.6); backdrop-filter: blur(4px); }
 .q-error { grid-column: 1 / -1; margin: 2px 0 0; font: 400 13px/1.4 var(--geist); color: var(--danger); }
 .q-summary { margin: 16px 0 4px; font: 400 14px var(--geist); color: var(--text); }
 .q-summary a { color: var(--accent); }
+.folder-head { display: flex; align-items: center; gap: 8px; margin: 28px 0 12px; font: 500 15px var(--geist); }
+.folder-head:first-of-type { margin-top: 8px; }
+.folder-ico { flex: none; opacity: .7; }
 .asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
 .asset { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
 .thumb { position: relative; aspect-ratio: 4/3; background: var(--surface-2); }
@@ -592,7 +595,13 @@ html.am-lock, html.am-lock body { overflow: hidden; }
 .dl-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .dl-tile { position: relative; margin: 0; aspect-ratio: 16 / 10; border-radius: 14px; overflow: hidden; cursor: zoom-in; background: #111113; outline: none; transition: box-shadow .2s; }
 .dl-tile:focus-visible { box-shadow: 0 0 0 3px #dcd6bd, 0 0 0 5px #111113; }
-.dl-tile.is-out { display: none; }
+.dl-tile.is-out, .dl-group.is-out { display: none; }
+.dl-group + .dl-group { margin-top: 28px; }
+.dl-folder { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; color: #111113; font: 500 15px var(--geist); }
+.dl-files .dl-folder { margin-top: 24px; }
+.dl-folder em { font: 400 11px var(--mono); font-style: normal; opacity: .55; }
+.dl-folder-dl { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 999px; background: #ece7d3; color: #111113; font: 500 13px var(--geist); text-decoration: none; }
+.dl-folder-dl:hover { background: #e2dcc4; }
 .dl-tile.wide { aspect-ratio: auto; }
 .dl-tile.wide-full { aspect-ratio: 21 / 9; }
 .dl-tile img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .8s cubic-bezier(.215,.61,.355,1), filter .3s; }

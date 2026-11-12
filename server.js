@@ -346,6 +346,12 @@ function sweepUnfinishedUploads() {
 const insertAsset = db.prepare(`INSERT INTO assets (project_id, original_name, stored_name, mime, size, kind, storage, position)
   VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM assets WHERE project_id = ?))`);
 
+// Folders come from the uploader's own computer: keep plain names only, a few levels deep.
+const cleanFolder = (v) => String(v || '').split(/[\\/]+/)
+  .map((s) => s.replace(/[\x00-\x1f]/g, '').trim().slice(0, 100))
+  .filter((s) => s && s !== '.' && s !== '..').slice(0, 8).join('/') || null;
+const setFolder = db.prepare('UPDATE assets SET folder = ? WHERE id = ?');
+
 // Refuse before reading the body when the upload can't fit in the creator's plan.
 const checkSpace = (req, res, next) => {
   const size = Number(req.headers['content-length']) || 0;
@@ -369,6 +375,8 @@ app.post('/projects/:id/upload', requireUser, ownProject, checkSpace, upload.arr
     const name = Buffer.from(f.originalname, 'latin1').toString('utf8');
     const kind = kindOf(f.mimetype, name);
     const r = insertAsset.run(req.project.id, name, f.filename, f.mimetype, f.size, kind, null, req.project.id);
+    const folder = cleanFolder(req.body && req.body.folder);
+    if (folder) setFolder.run(folder, r.lastInsertRowid);
     const thumb = await makeThumb(f.path, kind, r.lastInsertRowid);
     if (thumb) db.prepare('UPDATE assets SET thumb_name = ? WHERE id = ?').run(thumb, r.lastInsertRowid);
     out.push({ id: r.lastInsertRowid, name, kind, size: f.size });
@@ -472,6 +480,8 @@ app.post('/projects/:id/uploads/complete', ...direct, async (req, res) => {
   reserved.delete(f.uploadId);
   const kind = kindOf(type || '', name);
   const r = insertAsset.run(req.project.id, name, f.key, type, size, kind, 's3', req.project.id);
+  const folder = cleanFolder(f.b.folder);
+  if (folder) setFolder.run(folder, r.lastInsertRowid);
   await thumbFromStorage(f.key, kind, r.lastInsertRowid);
   res.json({ ok: true, files: [{ id: r.lastInsertRowid, name, kind, size }] });
 });
@@ -604,18 +614,23 @@ app.get('/d/:token/zip', loadDelivery, requireUnlocked, (req, res) => {
   // ?ids=1,2,3 zips only the files the client picked in the gallery.
   const ids = new Set(String(req.query.ids || '').split(',').map(Number).filter(Boolean));
   if (ids.size) assets = assets.filter((a) => ids.has(a.id));
+  // ?folder=BTS zips one folder, with the folders inside it.
+  const folder = req.query.folder ? cleanFolder(req.query.folder) : null;
+  if (folder) assets = assets.filter((a) => a.folder === folder || (a.folder || '').startsWith(folder + '/'));
   if (!assets.length) return res.sendStatus(404);
   track(req, 'zip');
   const safe = p.title.replace(/[^\w\- ]+/g, ' ').replace(/\s+/g, ' ').trim() || 'delivery';
-  res.attachment(`${safe}${ids.size ? ' (selection)' : ''}.zip`);
+  res.attachment(`${safe}${folder ? ` - ${folder.split('/').pop()}` : ids.size ? ' (selection)' : ''}.zip`);
   const zip = new ZipArchive({ store: true }); // media is already compressed
   zip.on('error', (e) => { console.error('zip', e.message); res.destroy(); });
   res.on('close', () => { if (!res.writableFinished) zip.abort(); });
   zip.pipe(res);
   const used = new Set();
+  // Files keep the folders they were uploaded in.
   const entries = assets.map((a) => {
-    let n = a.original_name, i = 1;
-    while (used.has(n)) n = a.original_name.replace(/(\.[^.]*)?$/, ` (${i++})$1`);
+    const full = (a.folder ? a.folder + '/' : '') + a.original_name.replace(/[\\/]/g, '_');
+    let n = full, i = 1;
+    while (used.has(n)) n = full.replace(/(\.[^./]*)?$/, ` (${i++})$1`);
     used.add(n);
     return { a, name: n };
   });

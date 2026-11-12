@@ -66,6 +66,10 @@ CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id);
 if (!db.prepare('PRAGMA table_info(assets)').all().some((c) => c.name === 'storage'))
   db.exec('ALTER TABLE assets ADD COLUMN storage TEXT');
 
+// The folder a file was dropped in, as "BTS" or "BTS/Raw" (NULL = not in a folder).
+if (!db.prepare('PRAGMA table_info(assets)').all().some((c) => c.name === 'folder'))
+  db.exec('ALTER TABLE assets ADD COLUMN folder TEXT');
+
 // Storage plan and Stripe subscription, per creator.
 const userCols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
 for (const [name, type] of [['plan', "TEXT NOT NULL DEFAULT 'free'"], ['plan_interval', 'TEXT'], ['plan_status', 'TEXT'],

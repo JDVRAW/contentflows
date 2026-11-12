@@ -13,17 +13,21 @@
   const visible = () => tiles.filter((t) => mode === 'all' || t.dataset.kind === mode).map((t) => +t.dataset.index);
 
   // ---- Even rows: when the tiles don't fill the last row, the first one widens so every row is full ----
-  const grid = document.querySelector('.dl-grid');
+  // Each folder has its own grid, so rows are balanced per grid; a folder with nothing to show is hidden.
+  const grids = [...document.querySelectorAll('.dl-grid')];
   function balance() {
-    if (!grid) return;
     tiles.forEach((t) => { t.classList.remove('wide', 'wide-full'); t.style.gridColumn = ''; });
-    const shown = tiles.filter((t) => !t.classList.contains('is-out'));
-    const cols = getComputedStyle(grid).gridTemplateColumns.split(' ').length;
-    const r = shown.length % cols;
-    if (!r || shown.length < 2) return;
-    const span = cols - r + 1;
-    shown[0].style.gridColumn = `span ${span}`;
-    shown[0].classList.add(span === cols ? 'wide-full' : 'wide');
+    grids.forEach((grid) => {
+      const shown = [...grid.querySelectorAll('.dl-tile')].filter((t) => !t.classList.contains('is-out'));
+      grid.closest('.dl-group')?.classList.toggle('is-out', !shown.length);
+      if (!shown.length) return;
+      const cols = getComputedStyle(grid).gridTemplateColumns.split(' ').length;
+      const r = shown.length % cols;
+      if (!r || shown.length < 2) return;
+      const span = cols - r + 1;
+      shown[0].style.gridColumn = `span ${span}`;
+      shown[0].classList.add(span === cols ? 'wide-full' : 'wide');
+    });
   }
   balance();
   let bt = 0;

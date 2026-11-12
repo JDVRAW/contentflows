@@ -373,6 +373,22 @@ function dashboard({ user, projects, usage }) {
   d.addEventListener('close', () => location.hash === '#new' && history.replaceState(null, '', location.pathname)); })();</script>` });
 }
 
+// Files grouped by the folder they were uploaded in: loose files first, then each folder in the
+// order its first file arrived. Folder paths show as "BTS / Raw".
+function byFolder(assets) {
+  const groups = new Map([['', []]]);
+  for (const a of assets) {
+    const f = a.folder || '';
+    if (!groups.has(f)) groups.set(f, []);
+    groups.get(f).push(a);
+  }
+  // Files in a folder upload a few at a time and land out of order, so they're sorted by name like on the uploader's computer.
+  const byName = (a, b) => a.original_name.localeCompare(b.original_name, undefined, { numeric: true, sensitivity: 'base' });
+  return [...groups].filter(([, items]) => items.length)
+    .map(([folder, items]) => ({ folder, label: folder.split('/').join(' / '), items: folder ? items.sort(byName) : items }));
+}
+const FOLDER_ICON = '<svg class="folder-ico" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2.2h8.4A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>';
+
 function projectPage({ user, project: p, assets, stats, origin, saved, direct, storageMissing, usage }) {
   const link = `${origin}/d/${p.share_token}`;
   const left = usage && usage.plan.limit !== Infinity ? usage.plan.limit - usage.used : null;
@@ -394,7 +410,8 @@ function projectPage({ user, project: p, assets, stats, origin, saved, direct, s
       <div class="spiral" data-spiral data-count="22" data-size=".75" aria-hidden="true"><div class="spiral-world"></div></div>
       <div class="drop-body">
         <input type="file" id="file-input" multiple hidden>
-        <p><b>Drop files here</b> or <button class="link" type="button" onclick="document.getElementById('file-input').click()">browse</button></p>
+        <input type="file" id="folder-input" webkitdirectory multiple hidden>
+        <p><b>Drop files or folders here</b> or browse <button class="link" type="button" onclick="document.getElementById('file-input').click()">files</button> · <button class="link" type="button" onclick="document.getElementById('folder-input').click()">a folder</button></p>
         <p class="muted small">Photos, videos, audio, or any final files${direct ? ' · sent straight to cloud storage' : ''}${left > 0 ? ` · ${fmtSize(left)} left on your plan` : ''}</p>
         ${left !== null && left <= 0 ? `<p class="q-error">Your ${esc(usage.plan.name)} plan is full, so new files can't be added. <a href="/pricing">See plans</a> or delete files you no longer need.</p>` : ''}
         ${storageMissing ? `<p class="q-error">Cloud storage is off because ${esc(storageMissing.join(', '))} ${storageMissing.length === 1 ? 'is' : 'are'} not set in the server's variables.</p>` : ''}
@@ -406,7 +423,7 @@ function projectPage({ user, project: p, assets, stats, origin, saved, direct, s
 
   <section>
     <h2>Files <span class="muted">${assets.length}</span></h2>
-    ${assets.length ? `<div class="asset-grid">${assets.map((a) => `
+    ${assets.length ? byFolder(assets).map((g) => `${g.folder ? `<h3 class="folder-head">${FOLDER_ICON}${esc(g.label)} <span class="muted">${g.items.length}</span></h3>` : ''}<div class="asset-grid">${g.items.map((a) => `
       <div class="asset">
         <div class="thumb">${a.thumb_name ? `<img loading="lazy" src="/d/${p.share_token}/thumb/${a.id}" alt="">` : `<div class="file-icon">${esc((a.original_name.split('.').pop() || 'file').toUpperCase())}</div>`}
         ${a.kind === 'video' ? '<span class="badge">▶ Video</span>' : ''}${p.cover_asset_id === a.id ? '<span class="badge left">Cover</span>' : ''}</div>
@@ -415,7 +432,7 @@ function projectPage({ user, project: p, assets, stats, origin, saved, direct, s
           ${a.thumb_name || a.kind === 'video' ? `<form method="post" action="/projects/${p.id}/cover/${a.id}"><button class="link small">Set cover</button></form>` : ''}
           <form method="post" action="/projects/${p.id}/assets/${a.id}/delete" onsubmit="return confirm('Delete this file?')"><button class="link small danger">Delete</button></form>
         </div>
-      </div>`).join('')}</div>` : '<p class="muted">No files uploaded yet.</p>'}
+      </div>`).join('')}</div>`).join('') : '<p class="muted">No files uploaded yet.</p>'}
   </section>
 
   <section class="settings">
@@ -619,10 +636,15 @@ function deliveryPage({ project: p, assets, studio, host = '' }) {
   // A video can be the cover even before it has a poster frame: the hero just plays it.
   const usable = (a) => a.thumb_name || a.kind === 'video';
   const cover = assets.find((a) => a.id === p.cover_asset_id && usable(a)) || assets.find((a) => a.thumb_name) || assets.find(usable);
-  const visual = assets.filter((a) => a.kind === 'image' || a.kind === 'video');
+  const isVisual = (a) => a.kind === 'image' || a.kind === 'video';
+  const visualGroups = byFolder(assets.filter(isVisual));
+  const otherGroups = byFolder(assets.filter((a) => !isVisual(a)));
+  const visual = visualGroups.flatMap((g) => g.items);
+  const folderZip = (g) => (canDl && g.folder ? `<a class="dl-folder-dl" href="${base}/zip?folder=${encodeURIComponent(g.folder)}">${DL_ICON}<span>Download folder</span></a>` : '');
+  const folderHead = (g, tag) => (g.folder ? `<${tag} class="dl-folder">${FOLDER_ICON}<b>${esc(g.label)}</b><em>${g.items.length}</em>${folderZip(g)}</${tag}>` : '');
   const photos = visual.filter((a) => a.kind === 'image').length;
   const films = visual.length - photos;
-  const others = assets.filter((a) => a.kind !== 'image' && a.kind !== 'video');
+  const others = otherGroups.flatMap((g) => g.items);
   const total = assets.reduce((s, a) => s + a.size, 0);
   const type = TYPES[p.type] || 'Delivery';
   const items = visual.map((a) => ({ id: a.id, kind: a.kind, name: a.original_name, size: a.size, src: `${base}/media/${a.id}`, poster: a.thumb_name ? `${base}/thumb/${a.id}` : null, dl: p.allow_download ? `${base}/download/${a.id}` : null }));
@@ -669,13 +691,13 @@ ${visual.length ? `<section class="lp lp-light dl-gallery" id="work" data-header
         <button type="button" class="dl-link" aria-label="Copy the link to this delivery"><span class="dl-link-text">${esc(host + base)}</span><span class="dl-link-tip" aria-hidden="true">Copy</span></button>
         ${filters}
       </div>
-      <div class="dl-grid">${visual.map((a, i) => `
-        <figure class="dl-tile ${a.kind}" data-index="${i}" data-id="${a.id}" data-kind="${a.kind}" data-size="${a.size}" tabindex="0" aria-label="Open ${esc(a.original_name)}">
+      ${(() => { let i = 0; return visualGroups.map((g) => `<div class="dl-group">${folderHead(g, 'div')}<div class="dl-grid">${g.items.map((a) => `
+        <figure class="dl-tile ${a.kind}" data-index="${i++}" data-id="${a.id}" data-kind="${a.kind}" data-size="${a.size}" tabindex="0" aria-label="Open ${esc(a.original_name)}">
           ${a.thumb_name ? `<img loading="lazy" src="${base}/thumb/${a.id}" alt="">` : `<div class="dl-noimg">${ext(a.original_name)}</div>`}
           ${a.kind === 'video' ? '<span class="dl-play" aria-hidden="true"></span>' : ''}
           ${canDl ? `<button type="button" class="dl-check" aria-pressed="false" aria-label="Select ${esc(a.original_name)}"></button>` : ''}
           <figcaption><span>${esc(a.original_name)}</span>${canDl ? `<a class="dl-down" href="${base}/download/${a.id}" aria-label="Download ${esc(a.original_name)}">${DL_ICON}</a>` : ''}</figcaption>
-        </figure>`).join('')}</div>
+        </figure>`).join('')}</div></div>`).join(''); })()}
     </div>
   </div>
 </section>` : ''}
@@ -683,13 +705,13 @@ ${visual.length ? `<section class="lp lp-light dl-gallery" id="work" data-header
 ${others.length ? `<section class="lp lp-light dl-files" id="files" data-header-theme="dark">
   <div class="lp-inner">
     <p class="lp-label">(${visual.length ? '02' : '01'}) Files</p>
-    <ul class="dl-list">${others.map((a) => `
+    ${otherGroups.map((g) => `${folderHead(g, 'div')}<ul class="dl-list">${g.items.map((a) => `
       <li class="dl-file">
         <span class="dl-ext">${ext(a.original_name)}</span>
         <div class="dl-meta"><b>${esc(a.original_name)}</b><small>${a.kind === 'audio' ? 'Audio' : 'File'} · ${fmtSize(a.size)}</small></div>
         ${a.kind === 'audio' ? `<div class="dl-player" data-src="${base}/media/${a.id}"><button type="button" class="dl-pp" aria-label="Play ${esc(a.original_name)}"><i></i></button><div class="dl-track"><i></i></div><span class="dl-time">0:00</span></div>` : '<span class="dl-spacer"></span>'}
         ${p.allow_download ? `<a class="dl-btn" href="${base}/download/${a.id}">${DL_ICON}<span>Download</span></a>` : ''}
-      </li>`).join('')}</ul>
+      </li>`).join('')}</ul>`).join('')}
   </div>
 </section>` : ''}
 
