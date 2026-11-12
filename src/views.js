@@ -85,7 +85,7 @@ function amNav({ base = '', theme = 'dark' } = {}) {
 // The home page header for signed-in creators: same bar, sliding dot and mobile drawer,
 // with the app's own links (the home page sends signed-in visitors to their deliveries).
 function appNav(user, current = '') {
-  const links = [{ href: '/dashboard', label: 'Deliveries' }, { href: '/connect', label: 'Connect AI' }, { href: '/pricing', label: 'Plans' }];
+  const links = [{ href: '/dashboard', label: 'Deliveries' }, { href: '/branding', label: 'Branding' }, { href: '/connect', label: 'Connect AI' }, { href: '/pricing', label: 'Plans' }];
   const link = (l, cls) => `<a class="${cls}" href="${l.href}"${l.href === current ? ' aria-current="page"' : ''}>${l.label}</a>`;
   return `
 <header class="am" id="am-header" data-theme="light">
@@ -100,7 +100,7 @@ function appNav(user, current = '') {
     </div>
   </div>
   <div class="am-mobile" id="am-mobile" aria-hidden="true">
-    <nav class="am-m-links"><a href="/dashboard">Deliveries</a><a href="/dashboard#new">New delivery</a><a href="/connect">Connect AI</a><a href="/pricing">Plans and storage</a></nav>
+    <nav class="am-m-links"><a href="/dashboard">Deliveries</a><a href="/dashboard#new">New delivery</a><a href="/branding">Branding</a><a href="/connect">Connect AI</a><a href="/pricing">Plans and storage</a></nav>
     <div class="am-m-foot"><button class="am-m-login" type="submit" form="logout-form">Log out</button><a class="fs-cta" href="/dashboard#new">New delivery</a></div>
   </div>
 </header>
@@ -151,7 +151,7 @@ function homePricing() {
         <div class="pc-body">
           <h3>${p.name}</h3>
           <p class="pc-line">${esc(p.line)}</p>
-          <p class="pc-space"><b>${planSize(p.limit)}</b><span>of storage</span></p>
+          <p class="pc-space"><b>${planSize(p.limit)}</b><span>of storage · your logo on deliveries</span></p>
           <p class="pc-price"><span><b>${dollars(p.month)}</b> / month</span><small>or ${dollars(p.year)} a year, 2 months free</small></p>
           <a class="fs-cta pc-cta${cta}" href="/signup?plan=${p.id}">Start with ${p.name}</a>
         </div>
@@ -162,7 +162,7 @@ function homePricing() {
     <div class="price-copy reveal">
       <p class="lp-label">(04) Pricing</p>
       <h2 class="lp-heading">Start free. Upgrade when your work outgrows it.</h2>
-      <p class="lp-body">Every studio starts with ${planSize(free.limit)} free. Pro and Studio give you room to keep every shoot and every cut online for your clients. The plans differ only in space, so every feature comes with every plan.</p>
+      <p class="lp-body">Every studio starts with ${planSize(free.limit)} free. Pro and Studio give you room to keep every shoot and every cut online for your clients. Pro and Studio also put your own logo on every delivery.</p>
       <ul class="check-list">
         <li>Unlimited deliveries</li>
         <li>Original quality, never compressed</li>
@@ -565,6 +565,7 @@ function pricingPage({ user, usage, plans, billingOn, subscribed, notice = {} })
       <div class="plan-top"><h2>${p.name}</h2>${p.id === cur ? '<span class="tag">Your plan</span>' : ''}</div>
       <p class="muted small plan-line">${esc(p.line)}</p>
       <p class="plan-space"><b>${planSize(p.limit)}</b> of storage</p>
+      <p class="muted small plan-brand">${p.id === 'free' ? 'Your studio name on deliveries' : 'Your logo on deliveries'}</p>
       <p class="plan-price">${p.month ? `<span class="iv-month"><b>${dollars(p.month)}</b> / month</span><span class="iv-year"><b>${dollars(p.year)}</b> / year <small>${dollars(p.year / 12)} a month</small></span>` : '<b>$0</b> <small>forever</small>'}</p>
       <div class="plan-action"><div class="iv-month">${action(p, 'month')}</div><div class="iv-year">${action(p, 'year')}</div></div>
     </article>`;
@@ -585,7 +586,7 @@ function pricingPage({ user, usage, plans, billingOn, subscribed, notice = {} })
   <div class="pricing-head">
     <p class="eyebrow">Plans</p>
     <h1>Room for every delivery</h1>
-    <p class="lede">Every plan includes unlimited deliveries and full-quality files. Plans differ only in how much you keep stored.</p>
+    <p class="lede">Every plan includes unlimited deliveries and full-quality files. Pro and Studio add more space and your own logo on every delivery.</p>
   </div>
   ${messages.map((m) => `<p class="notice">${esc(m)}</p>`).join('')}
   ${pastDue ? `<p class="error">Your last payment didn't go through. Update your card under Manage billing to keep your ${esc(curName)} plan.</p>` : ''}
@@ -608,10 +609,10 @@ function pricingPage({ user, usage, plans, billingOn, subscribed, notice = {} })
 </main>` });
 }
 
-function unlockPage({ project, studio, error }) {
+function unlockPage({ project, studio, brand, error }) {
   return layout({ title: project.title, bodyClass: 'auth', body: `
 <main class="auth-card">
-  <p class="eyebrow">${esc(studio)}</p>
+  ${brand && brand.light ? `<p class="unlock-brand">${brandMark(brand, 'on-dark')}</p>` : `<p class="eyebrow">${esc(studio)}</p>`}
   <h1>${esc(project.title)}</h1>
   <p class="muted">This delivery is password protected.</p>
   ${error ? `<p class="error">${esc(error)}</p>` : ''}
@@ -670,6 +671,53 @@ function connectPage({ user, keys, origin, fresh, error }) {
 </main>` });
 }
 
+// Branding: the studio name every plan shows clients, and on Pro and up the logo that replaces it.
+function brandingPage({ user, canBrand, notice, error }) {
+  const name = user.studio || user.name;
+  const slot = (kind, title, hint) => {
+    const file = user[`logo_${kind}`];
+    return `<div class="logo-slot logo-${kind}">
+      <div class="logo-preview${file ? '' : ' empty'}">${file ? `<img src="/brand/${esc(file)}" alt="${esc(title)}">` : `<span>${esc(name)}</span>`}</div>
+      <div class="logo-info"><h3>${title}</h3><p class="muted small">${hint}</p>
+        ${canBrand ? `<div class="row">
+          <form method="post" action="/branding/logo" enctype="multipart/form-data" class="logo-form">
+            <input type="hidden" name="kind" value="${kind}">
+            <label class="btn ghost small file-btn">${file ? 'Replace' : 'Upload'}<input type="file" name="logo" accept="image/png,image/svg+xml,image/jpeg,image/webp" required hidden></label>
+          </form>
+          ${file ? `<form method="post" action="/branding/logo/remove"><input type="hidden" name="kind" value="${kind}"><button class="btn ghost small danger">Remove</button></form>` : ''}
+        </div>` : ''}
+      </div>
+    </div>`;
+  };
+  const kept = !canBrand && (user.logo_dark || user.logo_light);
+  return layout({ title: 'Branding', user, current: '/branding', scripts: ['/static/branding.js'], body: `
+<main class="wrap branding">
+  <div class="page-head"><div><h1>Branding</h1>
+  <p class="muted">How your studio appears to clients on every delivery page.</p></div></div>
+  ${notice ? `<p class="notice">${esc(notice)}</p>` : ''}
+  ${error ? `<p class="error">${esc(error)}</p>` : ''}
+  <section class="settings">
+    <h2>Studio name</h2>
+    <form method="post" action="/branding" class="grid2">
+      <label>Shown to clients<input name="studio" maxlength="80" value="${esc(user.studio || '')}" placeholder="${esc(user.name)}"></label>
+      <div class="row form-end"><button class="btn">Save name</button></div>
+    </form>
+  </section>
+  <section class="settings">
+    <div class="brand-head"><h2>Logo</h2>${canBrand ? '' : '<span class="tag">Pro and Studio</span>'}</div>
+    ${canBrand
+      ? '<p class="muted small">Your logo replaces your studio name at the top of every delivery. PNG or SVG with a transparent background works best, up to 2 MB. Upload one version, or both so it reads on light and dark backgrounds.</p>'
+      : `<p class="muted">Put your own logo on every delivery with Pro or Studio. On Free, clients see your studio name.</p>
+         ${kept ? '<p class="muted small">Your logo is saved and comes back as soon as you upgrade.</p>' : ''}
+         <p><a class="btn" href="/pricing">See plans</a></p>`}
+    ${canBrand ? `<div class="logo-slots">
+      ${slot('dark', 'For light backgrounds', 'A dark version, used on white and light sections.')}
+      ${slot('light', 'For dark backgrounds', 'A light or white version, used over your cover and dark sections.')}
+    </div>` : ''}
+  </section>
+</main>` });
+}
+
 function messagePage(title, text) {
   return layout({ title, bodyClass: 'auth', body: `<main class="auth-card"><h1>${esc(title)}</h1><p class="muted">${esc(text)}</p></main>` });
 }
@@ -678,12 +726,18 @@ const DL_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" ari
 
 // Client delivery header: same bar as the home page (adapted from Antimetal), with the
 // studio name as the logo, section links with the sliding dot, and Download all on the right.
-function deliveryHeader({ studio, links, cta }) {
+// The creator's logo (Pro and up) in place of their name. The header flips between light ink over
+// dark sections and dark ink over light ones, so each theme shows the matching version.
+const brandMark = (brand, cls = '') => (brand && brand.dark
+  ? `<span class="brand-mark ${cls}"><img class="bm-dark" src="${esc(brand.dark)}" alt="${esc(brand.name)}"><img class="bm-light" src="${esc(brand.light)}" alt="" aria-hidden="true"></span>`
+  : '');
+
+function deliveryHeader({ studio, brand, links, cta }) {
   const burger = `<svg class="am-i-open" width="16" height="12" viewBox="0 0 16 12" aria-hidden="true"><path d="M0 1h16M0 6h16M0 11h16" stroke="currentColor" stroke-width="1.4"/></svg><svg class="am-i-close" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M1 1l12 12M13 1L1 13" stroke="currentColor" stroke-width="1.4"/></svg>`;
   return `
 <header class="am" id="am-header" data-theme="light">
   <div class="am-bar">
-    <a class="am-logo am-studio" href="#top">${esc(studio)}</a>
+    ${brand && brand.dark ? `<a class="am-logo am-brand" href="#top">${brandMark(brand)}</a>` : `<a class="am-logo am-studio" href="#top">${esc(studio)}</a>`}
     <nav class="am-links" id="am-links" aria-label="Delivery">${links.map((l) => `<a class="am-link" href="${l.href}">${esc(l.label)}</a>`).join('')}<span class="am-dot" id="am-dot" aria-hidden="true"></span></nav>
     <div class="am-right">${cta ? `<a class="am-cta" href="${cta.href}">${DL_ICON}<span>${esc(cta.label)}</span></a>` : ''}
       <button class="am-burger" id="am-burger" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="am-mobile">${burger}</button></div>
@@ -695,7 +749,7 @@ function deliveryHeader({ studio, links, cta }) {
 </header>`;
 }
 
-function deliveryPage({ project: p, assets, studio, host = '', folderOrder = [] }) {
+function deliveryPage({ project: p, assets, studio, brand, host = '', folderOrder = [] }) {
   const base = `/d/${p.share_token}`;
   const canDl = !!p.allow_download && assets.length > 0;
   // A video can be the cover even before it has a poster frame: the hero just plays it.
@@ -723,7 +777,7 @@ function deliveryPage({ project: p, assets, studio, host = '', folderOrder = [] 
   const filters = photos && films ? `<div class="dl-filter" role="group" aria-label="Show">
       <button type="button" class="on" data-f="all" aria-pressed="true">All <em>${visual.length}</em></button><button type="button" data-f="image" aria-pressed="false">Photos <em>${photos}</em></button><button type="button" data-f="video" aria-pressed="false">Films <em>${films}</em></button><span class="dl-filter-dot" aria-hidden="true"></span></div>` : '';
   return layout({ title: p.title, bodyClass: 'delivery', scripts: ['/static/gallery.js'],
-    header: deliveryHeader({ studio, links, cta: canDl ? { href: `${base}/zip`, label: `Download all` } : null }), body: `
+    header: deliveryHeader({ studio, brand, links, cta: canDl ? { href: `${base}/zip`, label: `Download all` } : null }), body: `
 <section class="fs-hero dl-hero" id="top" data-header-theme="light">
   ${cover ? (cover.kind === 'video'
     ? `<video class="fs-media" src="${base}/media/${cover.id}"${cover.thumb_name ? ` poster="${base}/thumb/${cover.id}"` : ''} autoplay muted loop playsinline preload="metadata"></video>`
@@ -812,4 +866,4 @@ ${canDl ? `<div class="dl-selbar" id="dl-selbar" aria-live="polite">
 <script>window.CF_ITEMS = ${JSON.stringify(items).replace(/</g, '\\u003c')};</script>` });
 }
 
-module.exports = { byFolder, landing, authForm, dashboard, projectPage, connectPage, unlockPage, deliveryPage, messagePage, pricingPage, fmtSize, TYPES };
+module.exports = { brandingPage, byFolder, landing, authForm, dashboard, projectPage, connectPage, unlockPage, deliveryPage, messagePage, pricingPage, fmtSize, TYPES };

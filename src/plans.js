@@ -16,4 +16,15 @@ const isOwner = (user) => !!user && OWNERS.has(String(user.email).toLowerCase())
 
 const planOf = (user) => (isOwner(user) ? { id: 'owner', name: 'Owner', limit: Infinity } : PLANS[user?.plan] || PLANS.free);
 
-module.exports = { PLANS, PAID, INTERVALS, GB, planOf, isOwner };
+// Pro and up (and owners) can put their own logo on deliveries; Free shows the studio name.
+const canBrand = (user) => planOf(user).id !== 'free';
+
+// What a client sees as the creator's brand: the studio name, plus logo URLs when the plan allows.
+const brandOf = (user) => {
+  const name = user.studio || user.name;
+  if (!canBrand(user) || (!user.logo_dark && !user.logo_light)) return { name };
+  const url = (f) => (f ? `/brand/${f}` : null);
+  return { name, dark: url(user.logo_dark || user.logo_light), light: url(user.logo_light || user.logo_dark) };
+};
+
+module.exports = { PLANS, PAID, INTERVALS, GB, planOf, isOwner, canBrand, brandOf };

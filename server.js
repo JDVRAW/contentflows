@@ -11,7 +11,7 @@ const { db, DATA_DIR } = require('./src/db');
 const { kindOf, makeThumb } = require('./src/media');
 const storage = require('./src/storage');
 const billing = require('./src/billing');
-const { PLANS, PAID, INTERVALS, planOf } = require('./src/plans');
+const { PLANS, PAID, INTERVALS, planOf, canBrand, brandOf } = require('./src/plans');
 const V = require('./src/views');
 const { mcpRouter, newKey, hashKey } = require('./src/mcp');
 
@@ -28,6 +28,7 @@ const MAX_UPLOAD = Number(process.env.MAX_UPLOAD_MB || 10240) * 1024 * 1024;
 const LIMIT_TEXT = MAX_UPLOAD >= 1024 ** 3 ? `${+(MAX_UPLOAD / 1024 ** 3).toFixed(1)} GB` : `${Math.round(MAX_UPLOAD / 1024 ** 2)} MB`;
 const UPLOADS = path.join(DATA_DIR, 'uploads');
 const THUMBS = path.join(DATA_DIR, 'thumbs');
+const BRAND = path.join(DATA_DIR, 'brand');
 
 const app = express();
 app.set('trust proxy', true);
@@ -673,6 +674,66 @@ app.post('/connect/keys/:kid/delete', requireUser, (req, res) => {
   db.prepare('DELETE FROM api_keys WHERE id = ? AND user_id = ?').run(req.params.kid, req.user.id);
   res.redirect('/connect');
 });
+// ---------- creator: branding ----------
+// Everyone sets the studio name clients see; Pro and up can also upload their logo.
+const LOGO_MAX = 2 * 1024 * 1024;
+const logoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: LOGO_MAX, files: 1 } }).single('logo');
+// The file type is read from the bytes, not the name the browser sent.
+function logoType(buf) {
+  if (buf.length > 8 && buf.readUInt32BE(0) === 0x89504e47) return 'png';
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpg';
+  if (buf.length > 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'webp';
+  if (/<svg[\s>]/i.test(buf.toString('utf8', 0, Math.min(buf.length, 4096)))) return 'svg';
+  return null;
+}
+const LOGO_KINDS = { dark: 'logo_dark', light: 'logo_light' };
+const dropLogoFile = (f) => { if (f) fs.rm(path.join(BRAND, path.basename(f)), { force: true }, () => {}); };
+const brandingPage = (req, extra = {}) => V.brandingPage({ user: req.user, canBrand: canBrand(req.user), ...extra });
+
+app.get('/branding', requireUser, (req, res) => {
+  res.send(brandingPage(req, { notice: { saved: 'Studio name saved.', logo: 'Logo saved. Your deliveries show it now.', removed: 'Logo removed.' }[req.query.notice] }));
+});
+app.post('/branding', requireUser, (req, res) => {
+  const studio = String(req.body.studio || '').trim().slice(0, 80);
+  db.prepare('UPDATE users SET studio = ? WHERE id = ?').run(studio || null, req.user.id);
+  res.redirect('/branding?notice=saved');
+});
+app.post('/branding/logo', requireUser, (req, res) => {
+  if (!canBrand(req.user)) return res.status(403).send(brandingPage(req, { error: 'Logos come with Pro and Studio. Upgrade to add yours.' }));
+  logoUpload(req, res, (err) => {
+    const fail = (msg) => res.status(400).send(brandingPage(req, { error: msg }));
+    if (err) return fail(err.code === 'LIMIT_FILE_SIZE' ? 'That logo is over 2 MB. Export a smaller PNG or SVG and try again.' : 'That upload didn\'t go through. Try again.');
+    const col = LOGO_KINDS[req.body.kind];
+    if (!col) return fail('Choose which logo this is.');
+    if (!req.file) return fail('Choose a logo file first.');
+    const type = logoType(req.file.buffer);
+    if (!type) return fail('Use a PNG, SVG, JPG or WebP file.');
+    fs.mkdirSync(BRAND, { recursive: true });
+    const name = `${req.user.id}-${req.body.kind}-${token(8)}.${type}`;
+    fs.writeFileSync(path.join(BRAND, name), req.file.buffer);
+    dropLogoFile(req.user[col]);
+    db.prepare(`UPDATE users SET ${col} = ? WHERE id = ?`).run(name, req.user.id);
+    res.redirect('/branding?notice=logo');
+  });
+});
+app.post('/branding/logo/remove', requireUser, (req, res) => {
+  const col = LOGO_KINDS[req.body.kind];
+  if (col) {
+    dropLogoFile(req.user[col]);
+    db.prepare(`UPDATE users SET ${col} = NULL WHERE id = ?`).run(req.user.id);
+  }
+  res.redirect('/branding?notice=removed');
+});
+// Logos are public (they show on delivery pages). Each upload gets a new name, so they cache for good.
+// An SVG opened on its own runs no scripts.
+app.get('/brand/:file', (req, res) => {
+  const f = req.params.file;
+  if (!/^\d+-(dark|light)-[\w-]+\.(png|jpg|webp|svg)$/.test(f)) return res.status(404).end();
+  res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.sendFile(path.join(BRAND, f), { maxAge: '365d', immutable: true }, (e) => { if (e && !res.headersSent) res.status(404).end(); });
+});
+
 app.use('/mcp', mcpRouter({
   db, token, TYPES: V.TYPES, storage, kindOf, makeThumb, insertAsset, removeAssetFiles, spaceProblem, spaceLeft, reserved,
   usage, originOf, MAX_UPLOAD, UPLOADS, fmtSize: V.fmtSize, userView: billing.view,
@@ -720,15 +781,19 @@ const deliveryAssets = (req) => db.prepare('SELECT * FROM assets WHERE project_i
   .filter((a) => inScope(req, a))
   .map((a) => (req.scope ? { ...a, folder: a.folder === req.scope ? null : a.folder.slice(req.scope.length + 1) } : a));
 
+// The creator's name and, on Pro and up, their logo, as the client sees them.
+const ownerBrand = (p) => brandOf(billing.view(db.prepare('SELECT * FROM users WHERE id = ?').get(p.user_id)));
+
 app.get('/d/:token', loadDelivery, (req, res) => {
   const p = req.project;
   const studio = p.owner_studio || p.owner_name;
-  if (!req.unlocked) return res.send(V.unlockPage({ project: p, studio }));
+  const brand = ownerBrand(p);
+  if (!req.unlocked) return res.send(V.unlockPage({ project: p, studio, brand }));
   track(req, 'view');
   const assets = deliveryAssets(req);
   // Through a folder link, the order is the same but read from inside that folder.
   const order = folderOrderOf(p.id).filter((f) => !req.scope || f.startsWith(req.scope + '/')).map((f) => (req.scope ? f.slice(req.scope.length + 1) : f));
-  res.send(V.deliveryPage({ project: p, assets, studio, host: req.get('host'), folderOrder: order }));
+  res.send(V.deliveryPage({ project: p, assets, studio, brand, host: req.get('host'), folderOrder: order }));
 });
 
 app.post('/d/:token/unlock', loadDelivery, (req, res) => {
@@ -736,14 +801,14 @@ app.post('/d/:token/unlock', loadDelivery, (req, res) => {
   const studio = p.owner_studio || p.owner_name;
   const target = `delivery:${p.id}`;
   const wait = guessWait(req, target);
-  if (wait) return res.status(429).send(V.unlockPage({ project: p, studio, error: waitText(wait) }));
+  if (wait) return res.status(429).send(V.unlockPage({ project: p, studio, brand: ownerBrand(p), error: waitText(wait) }));
   if (p.password_hash && bcrypt.compareSync(req.body.password || '', p.password_hash)) {
     clearMisses(req, target);
     res.cookie(`cf_unlock_${p.id}`, unlockValue(p), { ...cookieOpts, signed: true, maxAge: 30 * 24 * 3600 * 1000 });
     return res.redirect(`/d/${p.share_token}`);
   }
   countMiss(req, target);
-  res.status(401).send(V.unlockPage({ project: p, studio, error: 'That password is not right.' }));
+  res.status(401).send(V.unlockPage({ project: p, studio, brand: ownerBrand(p), error: 'That password is not right.' }));
 });
 
 app.get('/d/:token/thumb/:aid', loadDelivery, requireUnlocked, (req, res) => {

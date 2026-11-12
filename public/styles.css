@@ -893,3 +893,32 @@ html.am-lock, html.am-lock body { overflow: hidden; }
 .collapsed > .dl-folder .dl-fold svg { transform: rotate(-90deg); }
 .dl-group.collapsed > .dl-grid, .dl-fgroup.collapsed > .dl-list { display: none; }
 .dl-group.collapsed > .dl-folder { margin-bottom: 0; }
+
+/* ===== Branding: creator logos on deliveries ===== */
+.brand-mark { display: inline-flex; align-items: center; }
+.brand-mark img { display: block; height: 28px; width: auto; max-width: 180px; object-fit: contain; }
+.am .am-brand { height: auto; display: flex; align-items: center; }
+.am .brand-mark .bm-light, .am[data-theme=light] .brand-mark .bm-dark { display: none; }
+.am[data-theme=light] .brand-mark .bm-light { display: block; }
+.brand-mark.on-dark .bm-dark { display: none; }
+.unlock-brand { margin: 0 0 18px; }
+.unlock-brand .brand-mark img { height: 36px; max-width: 220px; }
+@media (max-width: 767px) { .brand-mark img { height: 24px; max-width: 140px; } }
+
+.branding .settings + .settings { margin-top: 24px; }
+.brand-head { display: flex; align-items: center; gap: 12px; }
+.brand-head .tag { margin: 0; }
+.logo-slots { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; }
+.logo-slot { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.logo-preview { height: 120px; display: grid; place-items: center; padding: 20px; }
+.logo-dark .logo-preview { background: #f4f1ea; color: #111113; }
+.logo-light .logo-preview { background: #111113; color: #f1efe9; }
+.logo-preview img { max-height: 56px; max-width: 80%; object-fit: contain; }
+.logo-preview.empty span { font: 500 17px var(--geist); opacity: .45; }
+.logo-info { padding: 16px; }
+.logo-info h3 { margin: 0 0 4px; font-size: 15px; }
+.logo-info .row { display: flex; flex-wrap: wrap; margin-top: 12px; gap: 8px; }
+.logo-info form { margin: 0; }
+.file-btn { cursor: pointer; }
+.plan-brand { margin: -4px 0 12px; }
+@media (max-width: 640px) { .logo-slots { grid-template-columns: 1fr; } }
