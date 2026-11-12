@@ -85,7 +85,7 @@ function amNav({ base = '', theme = 'dark' } = {}) {
 // The home page header for signed-in creators: same bar, sliding dot and mobile drawer,
 // with the app's own links (the home page sends signed-in visitors to their deliveries).
 function appNav(user, current = '') {
-  const links = [{ href: '/dashboard', label: 'Deliveries' }, { href: '/branding', label: 'Branding' }, { href: '/connect', label: 'Connect AI' }, { href: '/pricing', label: 'Plans' }];
+  const links = [{ href: '/dashboard', label: 'Deliveries' }, { href: '/profile', label: 'Profile' }, { href: '/connect', label: 'Connect AI' }, { href: '/pricing', label: 'Plans' }];
   const link = (l, cls) => `<a class="${cls}" href="${l.href}"${l.href === current ? ' aria-current="page"' : ''}>${l.label}</a>`;
   return `
 <header class="am" id="am-header" data-theme="light">
@@ -93,14 +93,14 @@ function appNav(user, current = '') {
     <a class="am-logo header-logo is-brand" href="/dashboard" aria-label="ContentFlows deliveries">${LOGO}</a>
     <nav class="am-links" id="am-links" aria-label="Main">${links.map((l) => link(l, 'am-link')).join('')}<span class="am-dot" id="am-dot" aria-hidden="true"></span></nav>
     <div class="am-right">
-      <span class="am-studio" title="${esc(user.email)}">${esc(user.studio || user.name)}</span>
+      <a class="am-studio" href="/profile" title="Your profile · ${esc(user.email)}">${esc(user.studio || user.name)}</a>
       <button class="am-login" type="submit" form="logout-form">Log out</button>
       <a class="am-cta" href="/dashboard#new">New delivery</a>
       <button class="am-burger" id="am-burger" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="am-mobile">${BURGER}</button>
     </div>
   </div>
   <div class="am-mobile" id="am-mobile" aria-hidden="true">
-    <nav class="am-m-links"><a href="/dashboard">Deliveries</a><a href="/dashboard#new">New delivery</a><a href="/branding">Branding</a><a href="/connect">Connect AI</a><a href="/pricing">Plans and storage</a></nav>
+    <nav class="am-m-links"><a href="/dashboard">Deliveries</a><a href="/dashboard#new">New delivery</a><a href="/profile">Profile</a><a href="/connect">Connect AI</a><a href="/pricing">Plans and storage</a></nav>
     <div class="am-m-foot"><button class="am-m-login" type="submit" form="logout-form">Log out</button><a class="fs-cta" href="/dashboard#new">New delivery</a></div>
   </div>
 </header>
@@ -696,34 +696,51 @@ function connectPage({ user, keys, origin, fresh, error }) {
 </main>` });
 }
 
-// Branding: the studio name every plan shows clients, and on Pro and up the logo that replaces it.
-function brandingPage({ user, canBrand, notice, error }) {
+// Profile: the creator's own account in one place. Their name and login email, the brand/studio
+// name every plan shows clients, the logo that replaces it on Pro and up, and their password.
+// section: which form an error belongs to, so it shows next to that form.
+function profilePage({ user, canBrand, notice, error, section, values = {} }) {
   const name = user.studio || user.name;
+  const err = (s) => (error && section === s ? `<p class="error">${esc(error)}</p>` : '');
   const slot = (kind, title, hint) => {
     const file = user[`logo_${kind}`];
     return `<div class="logo-slot logo-${kind}">
       <div class="logo-preview${file ? '' : ' empty'}">${file ? `<img src="/brand/${esc(file)}" alt="${esc(title)}">` : `<span>${esc(name)}</span>`}</div>
       <div class="logo-info"><h3>${title}</h3><p class="muted small">${hint}</p>
         ${canBrand ? `<div class="row">
-          <form method="post" action="/branding/logo" enctype="multipart/form-data" class="logo-form">
+          <form method="post" action="/profile/logo" enctype="multipart/form-data" class="logo-form">
             <input type="hidden" name="kind" value="${kind}">
             <label class="btn ghost small file-btn">${file ? 'Replace' : 'Upload'}<input type="file" name="logo" accept="image/png,image/svg+xml,image/jpeg,image/webp" required hidden></label>
           </form>
-          ${file ? `<form method="post" action="/branding/logo/remove"><input type="hidden" name="kind" value="${kind}"><button class="btn ghost small danger">Remove</button></form>` : ''}
+          ${file ? `<form method="post" action="/profile/logo/remove"><input type="hidden" name="kind" value="${kind}"><button class="btn ghost small danger">Remove</button></form>` : ''}
         </div>` : ''}
       </div>
     </div>`;
   };
   const kept = !canBrand && (user.logo_dark || user.logo_light);
-  return layout({ title: 'Branding', user, current: '/branding', scripts: ['/static/branding.js'], body: `
-<main class="wrap branding">
-  <div class="page-head"><div><h1>Branding</h1>
-  <p class="muted">How your studio appears to clients on every delivery page.</p></div></div>
+  const v = { name: values.name ?? user.name, email: values.email ?? user.email };
+  return layout({ title: 'Profile', user, current: '/profile', scripts: ['/static/profile.js'], body: `
+<main class="wrap profile">
+  <div class="page-head"><div><h1>Profile</h1>
+  <p class="muted">Your account, and how your studio appears to clients on every delivery.</p></div></div>
   ${notice ? `<p class="notice">${esc(notice)}</p>` : ''}
-  ${error ? `<p class="error">${esc(error)}</p>` : ''}
-  <section class="settings">
+  ${error && !['details', 'password', 'brand'].includes(section) ? `<p class="error">${esc(error)}</p>` : ''}
+
+  <section class="settings" id="details">
+    <h2>Your details</h2>
+    ${err('details')}
+    <form method="post" action="/profile/details" class="grid2 profile-details">
+      <label>Your name<input name="name" maxlength="80" value="${esc(v.name)}" required autocomplete="name"></label>
+      <label>Email <span class="muted">(you log in with it, and client replies come here)</span><input type="email" name="email" maxlength="254" value="${esc(v.email)}" required autocomplete="email" data-was="${esc(user.email)}"></label>
+      <label class="email-pass"${v.email === user.email ? ' hidden' : ''}>Current password <span class="muted">(needed to change your email)</span><input type="password" name="current" autocomplete="current-password"></label>
+      <div class="row form-end"><button class="btn">Save details</button></div>
+    </form>
+  </section>
+
+  <section class="settings" id="brand">
     <h2>Brand/Studio name</h2>
-    <form method="post" action="/branding" class="grid2">
+    ${err('brand')}
+    <form method="post" action="/profile/studio" class="grid2">
       <label>Shown to clients<input name="studio" maxlength="80" value="${esc(user.studio || '')}" placeholder="${esc(user.name)}"></label>
       <div class="row form-end"><button class="btn">Save name</button></div>
     </form>
@@ -739,6 +756,17 @@ function brandingPage({ user, canBrand, notice, error }) {
       ${slot('dark', 'For light backgrounds', 'A dark version, used on white and light sections.')}
       ${slot('light', 'For dark backgrounds', 'A light or white version, used over your cover and dark sections.')}
     </div>` : ''}
+  </section>
+
+  <section class="settings" id="password">
+    <h2>Password</h2>
+    ${err('password')}
+    <form method="post" action="/profile/password" class="profile-pass">
+      <label class="span2">Current password<input type="password" name="current" required autocomplete="current-password"></label>
+      <label>New password <span class="muted">(8+ characters)</span><input type="password" name="password" minlength="8" required autocomplete="new-password"></label>
+      <label>New password again<input type="password" name="confirm" minlength="8" required autocomplete="new-password"></label>
+      <div class="row form-end"><button class="btn">Change password</button></div>
+    </form>
   </section>
 </main>` });
 }
@@ -891,4 +919,4 @@ ${canDl ? `<div class="dl-selbar" id="dl-selbar" aria-live="polite">
 <script>window.CF_ITEMS = ${JSON.stringify(items).replace(/</g, '\\u003c')};</script>` });
 }
 
-module.exports = { brandingPage, byFolder, landing, authForm, dashboard, projectPage, connectPage, unlockPage, deliveryPage, messagePage, pricingPage, fmtSize, fmtDate, TYPES };
+module.exports = { profilePage, byFolder, landing, authForm, dashboard, projectPage, connectPage, unlockPage, deliveryPage, messagePage, pricingPage, fmtSize, fmtDate, TYPES };
