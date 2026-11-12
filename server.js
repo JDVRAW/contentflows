@@ -14,6 +14,7 @@ const billing = require('./src/billing');
 const { PLANS, PAID, INTERVALS, planOf, canBrand, brandOf } = require('./src/plans');
 const V = require('./src/views');
 const { mcpRouter, newKey, hashKey } = require('./src/mcp');
+const mail = require('./src/mail');
 
 const PORT = process.env.PORT || 3000;
 // Cookie signing key: SESSION_SECRET if set, otherwise one generated on first start and kept with the data.
@@ -260,7 +261,7 @@ app.get('/projects/:id', requireUser, ownProject, (req, res) => {
   const assets = db.prepare(`SELECT a.*, (SELECT COUNT(*) FROM events e WHERE e.asset_id = a.id AND e.type = 'download') AS downloads
     FROM assets a WHERE a.project_id = ? ORDER BY a.position, a.id`).all(p.id);
   const stats = db.prepare(`SELECT
-      SUM(type = 'view') AS views, SUM(type IN ('download', 'zip')) AS downloads, MAX(created_at) AS last
+      SUM(type = 'view') AS views, SUM(type IN ('download', 'zip')) AS downloads, MAX(CASE WHEN type != 'email' THEN created_at END) AS last
     FROM events WHERE project_id = ?`).get(p.id);
   const rows = db.prepare('SELECT path, collapsed, share_token, position FROM folders WHERE project_id = ? ORDER BY id').all(p.id);
   const folders = rows.map((r) => r.path).filter(Boolean);
@@ -268,6 +269,7 @@ app.get('/projects/:id', requireUser, ownProject, (req, res) => {
   const folderOrder = rows.filter((r) => r.path && r.position !== null).sort((a, b) => a.position - b.position).map((r) => r.path);
   const folderLinks = Object.fromEntries(rows.filter((r) => r.share_token && r.path).map((r) => [r.path, r.share_token]));
   res.send(V.projectPage({ user: req.user, project: p, assets, folders, collapsed, folderLinks, folderOrder, saved: req.query.saved, notice: req.query.notice,
+    mail: { enabled: mail.enabled, partlySet: mail.partlySet, sent: !!req.query.emailed, error: req.query.mail_error, maxTo: MAIL_MAX_TO },
     stats: { views: stats.views || 0, downloads: stats.downloads || 0, last: stats.last },
     origin: originOf(req), direct: storage.enabled, storageMissing: storage.partlySet, usage: usage(req.user) }));
 });
@@ -288,6 +290,38 @@ app.post('/projects/:id/settings', requireUser, ownProject, (req, res) => {
 app.post('/projects/:id/rotate', requireUser, ownProject, (req, res) => {
   db.prepare('UPDATE projects SET share_token = ? WHERE id = ?').run(token(16), req.project.id);
   res.redirect(`/projects/${req.project.id}`);
+});
+
+// Email the delivery link to the client, branded with the creator's name or logo. Replies go to the creator.
+// Each creator can send to MAIL_DAILY addresses a day, so nobody can use the site to send bulk mail.
+const MAIL_DAILY = Number(process.env.MAIL_DAILY_LIMIT || 50);
+const MAIL_MAX_TO = 5;
+app.post('/projects/:id/email', requireUser, ownProject, async (req, res) => {
+  const p = req.project;
+  const back = (q) => res.redirect(`/projects/${p.id}?${q}#share`);
+  if (!mail.enabled) return back('mail_error=off');
+  const { list, error } = mail.parseRecipients(req.body.to, MAIL_MAX_TO);
+  if (error) return back(`mail_error=${error}`);
+  const sentToday = db.prepare(`SELECT COUNT(*) AS n FROM events e JOIN projects p ON p.id = e.project_id
+    WHERE p.user_id = ? AND e.type = 'email' AND e.created_at > datetime('now', '-1 day')`).get(req.user.id).n;
+  if (sentToday + list.length > MAIL_DAILY) return back('mail_error=limit');
+  const files = db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS size FROM assets WHERE project_id = ?').get(p.id);
+  const origin = originOf(req);
+  const brand = brandOf(req.user);
+  const msg = mail.deliveryEmail({ project: p, brand, link: `${origin}/d/${p.share_token}`, origin,
+    fileCount: files.n, totalSize: files.size, fmtSize: V.fmtSize, fmtDate: V.fmtDate, typeLabel: V.TYPES[p.type] });
+  try {
+    // One email per address, so clients don't see each other's addresses.
+    for (const to of list) await mail.send({ to, ...msg, fromName: `${brand.name} via ContentFlows`, replyTo: req.user.email });
+  } catch (e) {
+    console.error('delivery email', String(e.message).split('\n')[0]);
+    return back('mail_error=failed');
+  }
+  const addEvent = db.prepare("INSERT INTO events (project_id, type) VALUES (?, 'email')");
+  for (const _ of list) addEvent.run(p.id);
+  db.prepare("UPDATE projects SET emailed_to = ?, emailed_at = datetime('now'), client_email = COALESCE(client_email, ?) WHERE id = ?")
+    .run(list.join(', '), list[0], p.id);
+  back('emailed=1');
 });
 
 app.post('/projects/:id/cover/:aid', requireUser, ownProject, (req, res) => {
