@@ -366,7 +366,7 @@ function dashboard({ user, projects, usage }) {
   <label>Title<input name="title" required placeholder="Summer campaign — finals"></label>
   <label>Type<select name="type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>
   <div class="row"><label>Client name<input name="client_name"></label><label>Client email<input type="email" name="client_email"></label></div>
-  <div class="row end"><button type="button" class="btn ghost" onclick="this.closest('dialog').close(); history.replaceState(null, '', location.pathname)">Cancel</button><button class="btn">Create</button></div>
+  <div class="row form-end"><button type="button" class="btn ghost" onclick="this.closest('dialog').close(); history.replaceState(null, '', location.pathname)">Cancel</button><button class="btn">Create</button></div>
 </form></dialog>
 <script>(() => { const d = document.getElementById('new');
   const sync = () => { if (location.hash === '#new' && !d.open) d.showModal(); };
@@ -512,7 +512,7 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
       <label>Expires on <span class="muted">(optional)</span><input type="date" name="expires_at" value="${esc(p.expires_at || '')}"></label></div>
       <label class="check"><input type="checkbox" name="allow_download" ${p.allow_download ? 'checked' : ''}> Allow client downloads</label>
       ${p.password_hash ? '<label class="check"><input type="checkbox" name="remove_password"> Remove password</label>' : ''}
-      <div class="row end"><button class="btn">Save settings</button></div>
+      <div class="row form-end"><button class="btn">Save settings</button></div>
     </form>
     <div class="danger-zone">
       <form method="post" action="/projects/${p.id}/rotate" onsubmit="return confirm('The old link will stop working. Continue?')"><button class="btn ghost">Generate new link</button></form>
