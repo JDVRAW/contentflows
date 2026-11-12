@@ -375,7 +375,8 @@ function dashboard({ user, projects, usage }) {
 
 // Files grouped by the folder they were uploaded in: loose files first, then each folder in the
 // order its first file arrived. Folder paths show as "BTS / Raw".
-function byFolder(assets) {
+// Folders listed in `keep` (made by hand on the project page) show even while empty.
+function byFolder(assets, keep = []) {
   const groups = new Map([['', []]]);
   for (const a of assets) {
     const f = a.folder || '';
@@ -384,15 +385,16 @@ function byFolder(assets) {
   }
   // Files in a folder upload a few at a time and land out of order, so they're sorted by name like on the uploader's computer.
   const byName = (a, b) => a.original_name.localeCompare(b.original_name, undefined, { numeric: true, sensitivity: 'base' });
-  return [...groups].filter(([, items]) => items.length)
+  for (const f of keep) if (!groups.has(f)) groups.set(f, []);
+  return [...groups].filter(([folder, items]) => items.length || (folder && keep.includes(folder)))
     .map(([folder, items]) => ({ folder, label: folder.split('/').join(' / '), items: folder ? items.sort(byName) : items }));
 }
 const FOLDER_ICON = '<svg class="folder-ico" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2.2h8.4A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>';
 
-function projectPage({ user, project: p, assets, stats, origin, saved, direct, storageMissing, usage }) {
+function projectPage({ user, project: p, assets, folders = [], stats, origin, saved, notice, direct, storageMissing, usage }) {
   const link = `${origin}/d/${p.share_token}`;
   const left = usage && usage.plan.limit !== Infinity ? usage.plan.limit - usage.used : null;
-  return layout({ title: p.title, user, current: '/dashboard', scripts: ['/static/spiral.js', '/static/upload.js'], body: `
+  return layout({ title: p.title, user, current: '/dashboard', scripts: ['/static/spiral.js', '/static/upload.js', '/static/files.js'], body: `
 <main class="wrap">
   <a class="back" href="/dashboard">← All deliveries</a>
   <div class="page-head"><div><span class="tag">${esc(TYPES[p.type] || p.type)}</span><h1>${esc(p.title)}</h1>
@@ -421,18 +423,59 @@ function projectPage({ user, project: p, assets, stats, origin, saved, direct, s
     </div>
   </section>
 
-  <section>
-    <h2>Files <span class="muted">${assets.length}</span></h2>
-    ${assets.length ? byFolder(assets).map((g) => `${g.folder ? `<h3 class="folder-head">${FOLDER_ICON}${esc(g.label)} <span class="muted">${g.items.length}</span></h3>` : ''}<div class="asset-grid">${g.items.map((a) => `
-      <div class="asset">
-        <div class="thumb">${a.thumb_name ? `<img loading="lazy" src="/d/${p.share_token}/thumb/${a.id}" alt="">` : `<div class="file-icon">${esc((a.original_name.split('.').pop() || 'file').toUpperCase())}</div>`}
+  <section id="files">
+    <div class="files-head">
+      <h2>Files <span class="muted">${assets.length}</span></h2>
+      <div class="files-tools">
+        ${assets.length ? '<button class="btn ghost small" type="button" data-select-all>Select all</button>' : ''}
+        <form method="post" action="/projects/${p.id}/folders" class="new-folder">
+          <input name="name" placeholder="New folder name" maxlength="100" required aria-label="New folder name">
+          <button class="btn ghost small">${FOLDER_ICON}Create folder</button>
+        </form>
+      </div>
+    </div>
+    ${notice ? `<p class="ok files-notice">${esc(notice)}</p>` : ''}
+    ${(() => {
+      const groups = byFolder(assets, folders);
+      if (!groups.length) return '<p class="muted">No files uploaded yet.</p>';
+      const anyFolder = groups.some((g) => g.folder);
+      // With folders around, "No folder" always shows so files can be dragged back out.
+      if (anyFolder && groups[0].folder) groups.unshift({ folder: '', label: '', items: [] });
+      return groups.map((g) => `<div class="file-group" data-folder="${esc(g.folder)}">
+      ${g.folder || anyFolder ? `<div class="folder-head">
+        ${g.items.length ? `<input type="checkbox" class="pick-group" aria-label="Select every file in ${esc(g.label || 'No folder')}">` : ''}
+        ${g.folder ? FOLDER_ICON : ''}<b>${esc(g.label || 'No folder')}</b> <span class="muted">${g.items.length}</span>
+        ${g.folder ? `<form method="post" action="/projects/${p.id}/folders/remove" class="folder-remove"${confirmAttr(g.items.length
+          ? `Remove the folder “${g.label}”? Its ${g.items.length} file${g.items.length === 1 ? '' : 's'} stay in the delivery and move up a level.`
+          : `Remove the empty folder “${g.label}”?`)}><input type="hidden" name="folder" value="${esc(g.folder)}"><button class="link small">Remove folder</button></form>` : ''}
+      </div>` : ''}
+      ${g.items.length ? `<div class="asset-grid">${g.items.map((a) => `
+      <div class="asset" data-id="${a.id}" draggable="true">
+        <label class="pick" title="Select"><input type="checkbox" name="ids" value="${a.id}" form="bulk" aria-label="Select ${esc(a.original_name)}"></label>
+        <div class="thumb">${a.thumb_name ? `<img loading="lazy" draggable="false" src="/d/${p.share_token}/thumb/${a.id}" alt="">` : `<div class="file-icon">${esc((a.original_name.split('.').pop() || 'file').toUpperCase())}</div>`}
         ${a.kind === 'video' ? '<span class="badge">▶ Video</span>' : ''}${p.cover_asset_id === a.id ? '<span class="badge left">Cover</span>' : ''}</div>
         <div class="asset-meta"><span title="${esc(a.original_name)}">${esc(a.original_name)}</span><span class="muted small">${fmtSize(a.size)} · ${a.downloads} dl</span></div>
         <div class="asset-actions">
           ${a.thumb_name || a.kind === 'video' ? `<form method="post" action="/projects/${p.id}/cover/${a.id}"><button class="link small">Set cover</button></form>` : ''}
           <form method="post" action="/projects/${p.id}/assets/${a.id}/delete" onsubmit="return confirm('Delete this file?')"><button class="link small danger">Delete</button></form>
         </div>
-      </div>`).join('')}</div>`).join('') : '<p class="muted">No files uploaded yet.</p>'}
+      </div>`).join('')}</div>` : `<div class="folder-empty">${g.folder ? 'Empty folder. Drag files here, or select files and choose Move.' : 'Every file is in a folder. Drag files here to take them out.'}</div>`}
+    </div>`).join('');
+    })()}
+    ${assets.length ? `<form method="post" action="/projects/${p.id}/assets/move" id="bulk" class="bulk-bar" hidden>
+      <span class="bulk-count" data-count>0 selected</span>
+      <label class="bulk-move">Move to
+        <select name="folder">
+          <option value="">No folder</option>
+          ${[...new Set([...byFolder(assets, folders).map((g) => g.folder).filter(Boolean)])].map((f) => `<option value="${esc(f)}">${esc(f.split('/').join(' / '))}</option>`).join('')}
+          <option value="__new">New folder…</option>
+        </select>
+      </label>
+      <input name="new_folder" placeholder="Folder name" maxlength="100" hidden aria-label="New folder name">
+      <button class="btn small">Move</button>
+      <button class="btn ghost small danger" formaction="/projects/${p.id}/assets/delete" data-delete>Delete</button>
+      <button class="link small" type="button" data-clear>Clear</button>
+    </form>` : ''}
   </section>
 
   <section class="settings">

@@ -261,7 +261,8 @@ app.get('/projects/:id', requireUser, ownProject, (req, res) => {
   const stats = db.prepare(`SELECT
       SUM(type = 'view') AS views, SUM(type IN ('download', 'zip')) AS downloads, MAX(created_at) AS last
     FROM events WHERE project_id = ?`).get(p.id);
-  res.send(V.projectPage({ user: req.user, project: p, assets, saved: req.query.saved,
+  const folders = db.prepare('SELECT path FROM folders WHERE project_id = ? ORDER BY id').all(p.id).map((r) => r.path);
+  res.send(V.projectPage({ user: req.user, project: p, assets, folders, saved: req.query.saved, notice: req.query.notice,
     stats: { views: stats.views || 0, downloads: stats.downloads || 0, last: stats.last },
     origin: originOf(req), direct: storage.enabled, storageMissing: storage.partlySet, usage: usage(req.user) }));
 });
@@ -300,6 +301,76 @@ app.post('/projects/:id/assets/:aid/delete', requireUser, ownProject, (req, res)
   const a = db.prepare('SELECT * FROM assets WHERE id = ? AND project_id = ?').get(req.params.aid, req.project.id);
   if (a) { db.prepare('DELETE FROM assets WHERE id = ?').run(a.id); removeAssetFiles(a); }
   res.redirect(`/projects/${req.project.id}`);
+});
+
+// ---------- creator: organizing files ----------
+// The ids picked on the project page (checkboxes send "ids" once per file), limited to this delivery.
+function pickedAssets(req) {
+  const raw = [].concat(req.body?.ids ?? []).flatMap((v) => String(v).split(','));
+  const ids = [...new Set(raw.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+  if (!ids.length) return [];
+  return db.prepare(`SELECT * FROM assets WHERE project_id = ? AND id IN (${ids.map(() => '?').join(',')})`).all(req.project.id, ...ids);
+}
+const back = (req, res, notice) => {
+  const url = `/projects/${req.project.id}${notice ? `?notice=${encodeURIComponent(notice)}` : ''}#files`;
+  return req.xhr ? res.json({ ok: true, redirect: url }) : res.redirect(url);
+};
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const saveFolder = db.prepare('INSERT OR IGNORE INTO folders (project_id, path) VALUES (?, ?)');
+
+app.post('/projects/:id/folders', requireUser, ownProject, (req, res) => {
+  const parent = cleanFolder(req.body?.parent);
+  const name = cleanFolder(req.body?.name);
+  if (!name) return back(req, res, 'Give the folder a name.');
+  const full = cleanFolder(parent ? `${parent}/${name}` : name);
+  saveFolder.run(req.project.id, full);
+  back(req, res, `Folder “${full.split('/').join(' / ')}” created.`);
+});
+
+// Removing a folder keeps its files: they move up into the folder it was in (or out of folders).
+app.post('/projects/:id/folders/remove', requireUser, ownProject, (req, res) => {
+  const folder = cleanFolder(req.body?.folder);
+  if (!folder) return back(req, res);
+  const parent = folder.includes('/') ? folder.slice(0, folder.lastIndexOf('/')) : null;
+  const lift = (f) => cleanFolder((parent ? parent + '/' : '') + f.slice(folder.length + 1)) || null;
+  db.transaction(() => {
+    db.prepare('UPDATE assets SET folder = ? WHERE project_id = ? AND folder = ?').run(parent, req.project.id, folder);
+    for (const a of db.prepare("SELECT id, folder FROM assets WHERE project_id = ? AND folder LIKE ? ESCAPE '\\'")
+      .all(req.project.id, folder.replace(/[\\%_]/g, '\\$&') + '/%')) setFolder.run(lift(a.folder), a.id);
+    for (const f of db.prepare('SELECT id, path FROM folders WHERE project_id = ?').all(req.project.id)) {
+      if (f.path === folder) db.prepare('DELETE FROM folders WHERE id = ?').run(f.id);
+      else if (f.path.startsWith(folder + '/')) {
+        db.prepare('DELETE FROM folders WHERE id = ?').run(f.id);
+        saveFolder.run(req.project.id, lift(f.path));
+      }
+    }
+  })();
+  back(req, res, `Folder removed. Its files were kept.`);
+});
+
+// Move picked files into a folder: an existing one, a new one, or "" for no folder.
+app.post('/projects/:id/assets/move', requireUser, ownProject, (req, res) => {
+  const picked = pickedAssets(req);
+  if (!picked.length) return back(req, res, 'Pick the files to move first.');
+  let target = req.body?.folder === '__new' ? cleanFolder(req.body?.new_folder) : cleanFolder(req.body?.folder);
+  if (req.body?.folder === '__new' && !target) return back(req, res, 'Give the new folder a name.');
+  db.transaction(() => {
+    if (target) saveFolder.run(req.project.id, target);
+    picked.forEach((a) => setFolder.run(target, a.id));
+  })();
+  back(req, res, `Moved ${plural(picked.length, 'file')} to ${target ? `“${target.split('/').join(' / ')}”` : 'no folder'}.`);
+});
+
+app.post('/projects/:id/assets/delete', requireUser, ownProject, (req, res) => {
+  const picked = pickedAssets(req);
+  if (!picked.length) return back(req, res, 'Pick the files to delete first.');
+  db.transaction(() => {
+    picked.forEach((a) => db.prepare('DELETE FROM assets WHERE id = ?').run(a.id));
+    if (picked.some((a) => a.id === req.project.cover_asset_id))
+      db.prepare('UPDATE projects SET cover_asset_id = NULL WHERE id = ?').run(req.project.id);
+  })();
+  picked.forEach(removeAssetFiles);
+  back(req, res, `Deleted ${plural(picked.length, 'file')}.`);
 });
 
 app.post('/projects/:id/delete', requireUser, ownProject, (req, res) => {
