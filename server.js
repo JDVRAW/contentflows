@@ -261,8 +261,10 @@ app.get('/projects/:id', requireUser, ownProject, (req, res) => {
   const stats = db.prepare(`SELECT
       SUM(type = 'view') AS views, SUM(type IN ('download', 'zip')) AS downloads, MAX(created_at) AS last
     FROM events WHERE project_id = ?`).get(p.id);
-  const folders = db.prepare('SELECT path FROM folders WHERE project_id = ? ORDER BY id').all(p.id).map((r) => r.path);
-  res.send(V.projectPage({ user: req.user, project: p, assets, folders, saved: req.query.saved, notice: req.query.notice,
+  const rows = db.prepare('SELECT path, collapsed FROM folders WHERE project_id = ? ORDER BY id').all(p.id);
+  const folders = rows.map((r) => r.path).filter(Boolean);
+  const collapsed = rows.filter((r) => r.collapsed).map((r) => r.path);
+  res.send(V.projectPage({ user: req.user, project: p, assets, folders, collapsed, saved: req.query.saved, notice: req.query.notice,
     stats: { views: stats.views || 0, downloads: stats.downloads || 0, last: stats.last },
     origin: originOf(req), direct: storage.enabled, storageMissing: storage.partlySet, usage: usage(req.user) }));
 });
@@ -325,6 +327,17 @@ app.post('/projects/:id/folders', requireUser, ownProject, (req, res) => {
   const full = cleanFolder(parent ? `${parent}/${name}` : name);
   saveFolder.run(req.project.id, full);
   back(req, res, `Folder “${full.split('/').join(' / ')}” created.`);
+});
+
+// Fold a folder shut or open it again; the page remembers it. folder "" is the "No folder" group.
+app.post('/projects/:id/folders/collapse', requireUser, ownProject, (req, res) => {
+  const raw = String(req.body?.folder ?? '');
+  const folder = raw ? cleanFolder(raw) : '';
+  if (folder === null) return res.status(400).json({ ok: false });
+  db.prepare(`INSERT INTO folders (project_id, path, collapsed) VALUES (?, ?, ?)
+    ON CONFLICT (project_id, path) DO UPDATE SET collapsed = excluded.collapsed`)
+    .run(req.project.id, folder, req.body?.collapsed === '1' ? 1 : 0);
+  res.json({ ok: true });
 });
 
 // Removing a folder keeps its files: they move up into the folder it was in (or out of folders).

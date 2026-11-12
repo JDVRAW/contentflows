@@ -116,6 +116,33 @@
     } catch (err) { alert('Those files could not be moved. Check your connection and try again.'); }
   });
 
+  // Folding folders shut. Each change is saved, so the page opens the same way next time.
+  const foldBtn = root.querySelector('[data-fold-all]');
+  const groups = () => [...root.querySelectorAll('.file-group')].filter((g) => g.querySelector('.fold'));
+  const syncFoldAll = () => { if (foldBtn) foldBtn.textContent = groups().every((g) => g.classList.contains('collapsed')) ? 'Open all' : 'Close all'; };
+  function fold(g, shut) {
+    if (g.classList.contains('collapsed') === shut) return;
+    g.classList.toggle('collapsed', shut);
+    const b = g.querySelector('.fold'), name = g.querySelector('.fold-name')?.textContent || 'folder';
+    b.setAttribute('aria-expanded', String(!shut)); b.setAttribute('aria-label', `${shut ? 'Open' : 'Close'} ${name}`);
+    fetch(`${root.dataset.base}/folders/collapse`, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+      body: new URLSearchParams({ folder: g.dataset.folder, collapsed: shut ? '1' : '0' }),
+    }).catch(() => {});
+  }
+  root.addEventListener('click', (e) => {
+    const t = e.target.closest('.fold, .fold-name');
+    if (!t) return;
+    const g = t.closest('.file-group');
+    fold(g, !g.classList.contains('collapsed')); syncFoldAll();
+  });
+  foldBtn?.addEventListener('click', () => {
+    const shut = !groups().every((g) => g.classList.contains('collapsed'));
+    groups().forEach((g) => fold(g, shut)); syncFoldAll();
+  });
+  syncFoldAll();
+
   // The note about the last move or delete is for this visit only; an upload's reload shouldn't repeat it.
   if (new URLSearchParams(location.search).has('notice')) history.replaceState(null, '', location.pathname + location.hash);
   sync();
