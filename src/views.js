@@ -443,6 +443,8 @@ const MAIL_ERRORS = {
   many: 'Send to 5 addresses at most at a time.',
   limit: 'You\'ve reached today\'s email limit. Copy the link and send it yourself, or try again tomorrow.',
   failed: 'The email didn\'t go out. Try again in a minute, or copy the link and send it yourself.',
+  unverified: 'Confirm your own email first, then send the link.',
+  busy: 'Email sending is paused for today. Copy the link and send it yourself.',
 };
 function mailBox(p, mail) {
   const last = p.emailed_at ? `Last emailed to ${esc(p.emailed_to)} on ${fmtDate(p.emailed_at)}` : '';
@@ -450,6 +452,8 @@ function mailBox(p, mail) {
     : mail.error ? `<p class="q-error">${esc(MAIL_ERRORS[mail.error] || MAIL_ERRORS.failed)}</p>`
     : last ? `<p class="muted small">${last}</p>` : '';
   if (!mail.enabled) return `<div class="share-mail is-off"><p class="muted small">Sending the link by email turns on once the site's email service is set up${mail.partlySet ? ` (missing ${esc(mail.partlySet.join(', '))})` : ''}.</p>${status}</div>`;
+  if (!mail.verified) return `<div class="share-mail is-off"><p class="muted small">To email the link from here, first confirm your own email (${esc(mail.email)}). Open the link we sent you, or get a new one.</p>
+    <form method="post" action="/profile/verify"><button class="btn ghost small">Send confirmation link</button></form>${status}</div>`;
   return `<form class="share-mail" method="post" action="/projects/${p.id}/email">
     <label for="mail-to" class="small">Email the link to your client</label>
     <div class="copy"><input id="mail-to" name="to" type="text" inputmode="email" autocomplete="off" value="${esc(p.client_email || '')}" placeholder="client@email.com" required aria-describedby="mail-hint">
@@ -738,7 +742,7 @@ function connectPage({ user, keys, origin, fresh, error }) {
 // Profile: the creator's own account in one place. Their name and login email, the brand/studio
 // name every plan shows clients, the logo that replaces it on Pro and up, and their password.
 // section: which form an error belongs to, so it shows next to that form.
-function profilePage({ user, canBrand, notice, error, section, values = {} }) {
+function profilePage({ user, canBrand, mailOn, notice, error, section, values = {} }) {
   const name = user.studio || user.name;
   const err = (s) => (error && section === s ? `<p class="error">${esc(error)}</p>` : '');
   const slot = (kind, title, hint) => {
@@ -774,6 +778,9 @@ function profilePage({ user, canBrand, notice, error, section, values = {} }) {
       <label class="email-pass"${v.email === user.email ? ' hidden' : ''}>Current password <span class="muted">(needed to change your email)</span><input type="password" name="current" autocomplete="current-password"></label>
       <div class="row form-end"><button class="btn">Save details</button></div>
     </form>
+    ${mailOn && !user.email_verified ? `<form method="post" action="/profile/verify" class="row">
+      <p class="muted small">Your email isn't confirmed yet. Confirm it to email delivery links to clients.</p>
+      <button class="btn ghost small">Send confirmation link</button></form>` : ''}
   </section>
 
   <section class="settings" id="brand">

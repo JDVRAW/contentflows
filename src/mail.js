@@ -110,4 +110,36 @@ function deliveryEmail({ project: p, brand, link, origin, fileCount, totalSize, 
   return { subject, html, text };
 }
 
-module.exports = { enabled, partlySet, send, parseRecipients, deliveryEmail };
+// ---------- confirming a creator's own email ----------
+function verifyEmail({ name, link, origin }) {
+  const subject = 'Confirm your email for ContentFlows';
+  const hello = name ? `Hi ${String(name).split(/\s+/)[0]},` : 'Hi,';
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(subject)}</title></head>
+<body style="margin:0;padding:0;background:#F4F2EE;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F2EE;"><tr><td align="center" style="padding:40px 16px;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#FFFFFF;border-radius:16px;">
+    <tr><td style="padding:36px 40px 0;font-family:Helvetica,Arial,sans-serif;color:${INK};">
+      <h1 style="margin:0 0 20px;font-size:24px;line-height:1.25;font-weight:600;">Confirm your email</h1>
+      <p style="margin:0 0 14px;font-size:16px;line-height:1.55;">${esc(hello)}</p>
+      <p style="margin:0 0 14px;font-size:16px;line-height:1.55;">Open this link to confirm this is your email. Once it's confirmed, you can email delivery links to your clients from ContentFlows.</p>
+    </td></tr>
+    <tr><td style="padding:14px 40px 8px;">
+      <table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="border-radius:999px;background:${RED};">
+        <a href="${esc(link)}" style="display:inline-block;padding:14px 28px;font-family:Helvetica,Arial,sans-serif;font-size:16px;font-weight:600;color:#FFFFFF;text-decoration:none;border-radius:999px;">Confirm email</a>
+      </td></tr></table>
+    </td></tr>
+    <tr><td style="padding:20px 40px 36px;font-family:Helvetica,Arial,sans-serif;font-size:13px;line-height:1.5;color:${MUTED};">
+      The link works for 2 days. If you didn't make a ContentFlows account, you can ignore this email.<br><br>
+      If the button doesn't work, copy this link:<br><a href="${esc(link)}" style="color:${INK};word-break:break-all;">${esc(link)}</a>
+    </td></tr>
+  </table>
+  <p style="margin:20px 0 0;font-family:Helvetica,Arial,sans-serif;font-size:12px;color:${MUTED};"><a href="${esc(origin)}" style="color:${MUTED};">ContentFlows</a></p>
+</td></tr></table>
+</body></html>`;
+  const text = [hello, '', 'Open this link to confirm your email for ContentFlows:', link, '',
+    'The link works for 2 days. If you didn\'t make a ContentFlows account, you can ignore this email.'].join('\n');
+  return { subject, html, text };
+}
+
+module.exports = { enabled, partlySet, send, parseRecipients, deliveryEmail, verifyEmail };

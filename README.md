@@ -17,7 +17,7 @@ A delivery platform for creatives. Upload final photoshoots, music videos, comme
 - **Downloads**: single files, a picked selection (`/d/:token/zip?ids=1,2,3`), or "Download all" as a zip
 - **Link controls**: optional password, expiry date, downloads on/off, regenerate link to revoke the old one
 - **Security**: delivery links carry a random 128-bit code; passwords are stored as bcrypt hashes; after 10 wrong passwords from one address, or 30 in total, a delivery or account refuses more tries for 15 minutes. Files in R2 are served through signed links that expire after 6 hours. Only photos, video and audio open in the browser; any other file downloads, and files on the server's disk are sent with a `sandbox` policy, so an uploaded HTML or SVG file can't run as a page
-- **Email the link**: under the delivery link, "Email the link to your client" sends the client a short branded email (the studio's logo on Pro and Studio when it's a PNG, JPG or WebP, otherwise the studio name), with the delivery's title, the personal message, file count and size, expiry, and a "View your files" button. It comes from "Studio via ContentFlows" and replies go to the creator's own email. Up to 5 addresses at a time, each sent separately; the password is never included. Each creator can email 50 addresses a day (`MAIL_DAILY_LIMIT`). Needs `RESEND_API_KEY` and `MAIL_FROM` (see Email below); without them the box says email isn't set up
+- **Email the link**: under the delivery link, "Email the link to your client" sends the client a short branded email (the studio's logo on Pro and Studio when it's a PNG, JPG or WebP, otherwise the studio name), with the delivery's title, the personal message, file count and size, expiry, and a "View your files" button. It comes from "Studio via ContentFlows" and replies go to the creator's own email. Up to 5 addresses at a time, each sent separately; the password is never included. Each creator can email 50 addresses a day (`MAIL_DAILY_LIMIT`), and only after confirming their own email through the link sent at signup (accounts made before this check count as confirmed). Needs `RESEND_API_KEY` and `MAIL_FROM` (see Email below); without them the box says email isn't set up
 - **Tracking**: views and downloads per delivery and per file
 - **AI assistants (MCP)**: creators make an API key under Connect AI and add ContentFlows as a connector in Claude or any MCP app, which can then create deliveries, add files from links and hand back the share link (see below)
 - **Storage plans**: Free (10 GB), Pro ($12/month, 250 GB) and Studio ($29/month, 1 TB), yearly at 10× the monthly price. The limit is the total size of the files a creator keeps, shown as a meter on the dashboard and checked before each upload. Upgrades, plan changes and cancellations go through Stripe
@@ -82,11 +82,14 @@ npm start            # http://localhost:3000
 | `RESEND_API_KEY` | | [Resend](https://resend.com) API key (Sending access is enough). Turns on "Email the link" |
 | `MAIL_FROM` | | Address the emails come from, on a domain verified in Resend, e.g. `deliveries@yourdomain.com` |
 | `MAIL_DAILY_LIMIT` | `50` | Addresses each creator can email per 24 hours |
+| `MAIL_SITE_DAILY_LIMIT` | `500` | Emails the whole site sends per 24 hours (delivery emails and confirmation links together) |
+| `SIGNUPS_PER_HOUR` | `5` | New accounts allowed from one address per hour |
+| `TRUST_PROXY_HOPS` | `1` | Proxies in front of the app whose X-Forwarded-For entry is trusted (Railway: 1) |
 | `S3_REGION` | `auto` | Region (R2 uses `auto`) |
 | `S3_FORCE_PATH_STYLE` | | Set to `1` for services that need path-style URLs (MinIO, local test servers) |
 | `STRIPE_SECRET_KEY` | | Stripe secret key (`sk_live_…` or `sk_test_…`). Turns on paid plans |
 | `STRIPE_WEBHOOK_SECRET` | | Signing secret of the webhook endpoint (`whsec_…`) |
-| `OWNER_EMAILS` | | Comma-separated login emails with no storage limit (the people running the site) |
+| `OWNER_EMAILS` | | Comma-separated login emails with no storage limit (the people running the site). Only counts once that email is confirmed |
 
 When all four `S3_*` values are set, new uploads go to the bucket and clients stream and download them through signed links that last 6 hours. Without them, files are kept in `DATA_DIR/uploads`. Files uploaded before the switch keep working from the disk.
 
