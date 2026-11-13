@@ -37,10 +37,16 @@ function makeThumb(srcPath, kind, id) {
   });
 }
 
+const FORMATS = 'mov,matroska,avi,mpegts,flv,mxf,mpeg,mjpeg,gif,image2,png_pipe,jpeg_pipe,webp_pipe,tiff_pipe,bmp_pipe,jpegxl_pipe,heif';
+
 function runThumb(srcPath, kind, id) {
   const out = `${id}.jpg`;
   const outPath = path.join(DATA_DIR, 'thumbs', out);
   const args = ['-y', '-loglevel', 'error'];
+  // Uploaded files are untrusted. Only plain photo and video formats may be opened, and only the one
+  // file (or the loopback relay) itself: no playlists or file lists that point ffmpeg at other files
+  // on this server or at other addresses.
+  args.push('-protocol_whitelist', /^https?:/.test(srcPath) ? 'http,tcp' : 'file', '-format_whitelist', FORMATS);
   if (kind === 'video') args.push('-ss', '1');
   args.push('-i', srcPath, '-frames:v', '1', '-vf', "scale='min(1200,iw)':-2", '-q:v', '4', outPath);
   const opts = { timeout: /^https?:/.test(srcPath) ? 120000 : 60000 };

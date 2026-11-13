@@ -12,7 +12,8 @@ const INTERVALS = ['month', 'year'];
 
 // Accounts listed in OWNER_EMAILS (comma separated) have no storage limit: the people who run the site.
 const OWNERS = new Set(String(process.env.OWNER_EMAILS || '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean));
-const isOwner = (user) => !!user && OWNERS.has(String(user.email).toLowerCase());
+// Only once that email is confirmed, so nobody can claim the role by signing up with an owner's address.
+const isOwner = (user) => !!user && !!user.email_verified && OWNERS.has(String(user.email).toLowerCase());
 
 const planOf = (user) => (isOwner(user) ? { id: 'owner', name: 'Owner', limit: Infinity } : PLANS[user?.plan] || PLANS.free);
 

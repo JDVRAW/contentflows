@@ -127,4 +127,23 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
 const projectCols = new Set(db.prepare('PRAGMA table_info(projects)').all().map((c) => c.name));
 for (const name of ['emailed_to', 'emailed_at']) if (!projectCols.has(name)) db.exec(`ALTER TABLE projects ADD COLUMN ${name} TEXT`);
 
+// Whether the creator has confirmed they own their login email (by opening a link sent to it).
+// Accounts made before this check existed count as confirmed.
+if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'email_verified')) {
+  db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0');
+  db.exec('UPDATE users SET email_verified = 1');
+}
+// Confirmation links sent to creators. Only a hash of each link's token is kept.
+db.exec(`
+CREATE TABLE IF NOT EXISTS email_checks (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  email TEXT NOT NULL,
+  token_hash TEXT UNIQUE NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_email_checks_user ON email_checks(user_id);
+`);
+
 module.exports = { db, DATA_DIR };

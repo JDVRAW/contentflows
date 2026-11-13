@@ -32,7 +32,23 @@ const THUMBS = path.join(DATA_DIR, 'thumbs');
 const BRAND = path.join(DATA_DIR, 'brand');
 
 const app = express();
-app.set('trust proxy', true);
+// Railway's proxy adds the visitor's real address as the last X-Forwarded-For entry. Trusting only
+// that one hop means a visitor can't fake their address (which the password-guessing limits rely on)
+// by sending their own X-Forwarded-For. TRUST_PROXY_HOPS changes it for a host with more proxies.
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS ?? 1));
+// Browser safety rules for every page. Routes that serve files set a stricter policy of their own.
+app.use((req, res, next) => {
+  res.set({
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Content-Security-Policy': "frame-ancestors 'none'",
+    // Delivery links are secrets: never send them to other sites as the page a visitor came from.
+    'Referrer-Policy': 'same-origin',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+  });
+  if (process.env.NODE_ENV === 'production') res.set('Strict-Transport-Security', 'max-age=31536000');
+  next();
+});
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser(SECRET));
 app.use('/static', express.static(path.join(__dirname, 'public'), { maxAge: '1h' }));
@@ -89,6 +105,7 @@ const waitText = (min) => `Too many wrong passwords. Try again in ${min} minute$
 setInterval(() => { const now = Date.now(); for (const [k, m] of misses) if (m.until <= now) misses.delete(k); }, 60 * 1000).unref();
 
 // ---------- auth ----------
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 app.use((req, res, next) => {
   const t = req.signedCookies.cf_session;
   if (t) {
@@ -119,20 +136,34 @@ const afterAuth = (plan) => (plan ? `/pricing?plan=${plan}` : '/dashboard');
 app.get('/signup', (req, res) => res.send(V.authForm({ mode: 'signup', plan: pickedPlan(req.query.plan) })));
 app.get('/login', (req, res) => res.send(V.authForm({ mode: 'login', plan: pickedPlan(req.query.plan) })));
 
-app.post('/signup', (req, res) => {
+// New accounts per address per hour, so nobody can make throwaway accounts in bulk.
+const SIGNUPS_PER_HOUR = Number(process.env.SIGNUPS_PER_HOUR || 5);
+const signups = new Map(); // ip -> { n, until }
+setInterval(() => { const now = Date.now(); for (const [k, m] of signups) if (m.until <= now) signups.delete(k); }, 60 * 1000).unref();
+
+app.post('/signup', async (req, res) => {
   const { name = '', studio = '', email = '', password = '' } = req.body;
   const values = { name, studio, email };
   const plan = pickedPlan(req.body.plan);
-  if (!name.trim() || !email.trim() || password.length < 8)
-    return res.status(400).send(V.authForm({ mode: 'signup', error: 'Name, email and an 8+ character password are required.', values, plan }));
+  const fail = (status, error) => res.status(status).send(V.authForm({ mode: 'signup', error, values, plan }));
+  if (!name.trim() || !EMAIL_RE.test(email.trim()) || password.length < 8)
+    return fail(400, 'Name, a valid email and an 8+ character password are required.');
+  const seen = signups.get(req.ip);
+  if (seen && seen.until > Date.now() && seen.n >= SIGNUPS_PER_HOUR) return fail(429, 'Too many new accounts from here. Try again in an hour.');
+  let user;
   try {
+    user = { email: email.trim().toLowerCase(), name: name.trim() };
     const r = db.prepare('INSERT INTO users (email, name, studio, password_hash) VALUES (?, ?, ?, ?)')
-      .run(email.trim().toLowerCase(), name.trim(), studio.trim() || null, bcrypt.hashSync(password, 10));
-    startSession(res, r.lastInsertRowid);
-    res.redirect(afterAuth(plan));
+      .run(user.email, user.name, studio.trim() || null, bcrypt.hashSync(password, 10));
+    user.id = r.lastInsertRowid;
   } catch (e) {
-    res.status(400).send(V.authForm({ mode: 'signup', error: 'An account with that email already exists.', values, plan }));
+    return fail(400, 'An account with that email already exists.');
   }
+  if (seen && seen.until > Date.now()) seen.n++;
+  else if (signups.size < 50000) signups.set(req.ip, { n: 1, until: Date.now() + 3600e3 });
+  startSession(res, user.id);
+  await sendVerification(req, user);
+  res.redirect(afterAuth(plan));
 });
 
 app.post('/login', (req, res) => {
@@ -186,6 +217,50 @@ const spaceLeft = (user) => {
   return plan.limit === Infinity ? Infinity : Math.max(0, plan.limit - usedBytes(user.id) - reservedBytes(user.id));
 };
 const originOf = (req) => process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+
+// ---------- confirming a creator's email ----------
+// A creator confirms they own their login email by opening a link sent to it. Until then they can't
+// email delivery links from the site, so a throwaway account can't use it to send mail to strangers.
+const VERIFY_TTL = 2 * 24 * 3600e3;
+const hashToken = (t) => crypto.createHash('sha256').update(t).digest('hex');
+// Emails the whole site may send in a day (delivery emails and confirmation links), whoever sends them.
+const MAIL_SITE_DAILY = Number(process.env.MAIL_SITE_DAILY_LIMIT || 500);
+const siteMailToday = () =>
+  db.prepare("SELECT COUNT(*) AS n FROM events WHERE type = 'email' AND created_at > datetime('now', '-1 day')").get().n
+  + db.prepare('SELECT COUNT(*) AS n FROM email_checks WHERE created_at > ?').get(Date.now() - 864e5).n;
+// Send a confirmation link to the user's current email. Resolves to null once sent, or a reason it wasn't.
+async function sendVerification(req, user) {
+  if (!mail.enabled) return 'off';
+  const recent = db.prepare('SELECT COUNT(*) AS n, MAX(created_at) AS last FROM email_checks WHERE user_id = ? AND created_at > ?')
+    .get(user.id, Date.now() - 864e5);
+  if (recent.n >= 5) return 'limit';
+  if (recent.last && Date.now() - recent.last < 60e3) return 'wait';
+  if (siteMailToday() >= MAIL_SITE_DAILY) return 'busy';
+  const t = token(24);
+  db.prepare('INSERT INTO email_checks (user_id, email, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(user.id, user.email, hashToken(t), Date.now() + VERIFY_TTL, Date.now());
+  const origin = originOf(req);
+  try {
+    await mail.send({ to: user.email, ...mail.verifyEmail({ name: user.name, link: `${origin}/verify/${t}`, origin }), fromName: 'ContentFlows' });
+    return null;
+  } catch (e) {
+    console.error('verify email', String(e.message).split('\n')[0]);
+    return 'failed';
+  }
+}
+setInterval(() => db.prepare('DELETE FROM email_checks WHERE created_at < ?').run(Date.now() - 7 * 864e5), 3600e3).unref();
+
+// The link from the email. It works without being logged in (it may be opened on a phone), and only
+// for the email it was sent to: after an email change, older links stop working.
+app.get('/verify/:token', (req, res) => {
+  const row = db.prepare('SELECT c.user_id, c.email, c.expires_at, u.email AS current FROM email_checks c JOIN users u ON u.id = c.user_id WHERE c.token_hash = ?')
+    .get(hashToken(String(req.params.token)));
+  if (!row || row.expires_at < Date.now() || row.email !== row.current)
+    return res.status(400).send(V.messagePage('This link has expired', 'Log in and send a new confirmation link from your profile.'));
+  db.prepare('UPDATE users SET email_verified = 1 WHERE id = ?').run(row.user_id);
+  if (req.user && req.user.id === row.user_id) return res.redirect('/profile?notice=verified#details');
+  res.send(V.messagePage('Email confirmed', 'Thanks. You can now email delivery links to your clients from ContentFlows.'));
+});
 
 app.get('/pricing', (req, res) => {
   res.send(V.pricingPage({ user: req.user, usage: req.user && usage(req.user), plans: PLANS, billingOn: billing.enabled,
@@ -269,7 +344,7 @@ app.get('/projects/:id', requireUser, ownProject, (req, res) => {
   const folderOrder = rows.filter((r) => r.path && r.position !== null).sort((a, b) => a.position - b.position).map((r) => r.path);
   const folderLinks = Object.fromEntries(rows.filter((r) => r.share_token && r.path).map((r) => [r.path, r.share_token]));
   res.send(V.projectPage({ user: req.user, project: p, assets, folders, collapsed, folderLinks, folderOrder, saved: req.query.saved, notice: req.query.notice,
-    mail: { enabled: mail.enabled, partlySet: mail.partlySet, sent: !!req.query.emailed, error: req.query.mail_error, maxTo: MAIL_MAX_TO },
+    mail: { enabled: mail.enabled, partlySet: mail.partlySet, verified: !!req.user.email_verified, email: req.user.email, sent: !!req.query.emailed, error: req.query.mail_error, maxTo: MAIL_MAX_TO },
     stats: { views: stats.views || 0, downloads: stats.downloads || 0, last: stats.last },
     origin: originOf(req), direct: storage.enabled, storageMissing: storage.partlySet, usage: usage(req.user) }));
 });
@@ -300,8 +375,10 @@ app.post('/projects/:id/email', requireUser, ownProject, async (req, res) => {
   const p = req.project;
   const back = (q) => res.redirect(`/projects/${p.id}?${q}#share`);
   if (!mail.enabled) return back('mail_error=off');
+  if (!req.user.email_verified) return back('mail_error=unverified');
   const { list, error } = mail.parseRecipients(req.body.to, MAIL_MAX_TO);
   if (error) return back(`mail_error=${error}`);
+  if (siteMailToday() + list.length > MAIL_SITE_DAILY) return back('mail_error=busy');
   const sentToday = db.prepare(`SELECT COUNT(*) AS n FROM events e JOIN projects p ON p.id = e.project_id
     WHERE p.user_id = ? AND e.type = 'email' AND e.created_at > datetime('now', '-1 day')`).get(req.user.id).n;
   if (sentToday + list.length > MAIL_DAILY) return back('mail_error=limit');
@@ -536,8 +613,14 @@ const cleanFolder = (v) => String(v || '').split(/[\\/]+/)
 const setFolder = db.prepare('UPDATE assets SET folder = ? WHERE id = ?');
 
 // Refuse before reading the body when the upload can't fit in the creator's plan.
+// The body is cut off at Content-Length, so a request that states its size can't bring more bytes than
+// that. One that doesn't state it (chunked) could bring any amount, so it is refused.
 const checkSpace = (req, res, next) => {
-  const size = Number(req.headers['content-length']) || 0;
+  const size = Number(req.headers['content-length']);
+  if (!Number.isFinite(size) || size <= 0) {
+    req.resume();
+    return req.on('end', () => res.status(411).json({ ok: false, error: 'The upload did not say how big it is. Refresh the page and try again.' }));
+  }
   const problem = spaceProblem(req.user, size);
   if (problem) {
     // Read and discard the body so the browser gets this answer instead of a dropped connection.
@@ -646,7 +729,10 @@ app.post('/projects/:id/uploads/start', ...direct, async (req, res) => {
 app.post('/projects/:id/uploads/sign', ...direct, async (req, res) => {
   const f = fileInfo(req, res);
   if (!f) return;
-  const nums = (Array.isArray(f.b.parts) ? f.b.parts : []).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= 10000);
+  // Only as many parts as the size given at the start needs (when the server still knows it).
+  const held = reserved.get(f.uploadId);
+  const most = held ? Math.max(1, Math.ceil(held.size / storage.partSizeFor(held.size))) : 10000;
+  const nums = (Array.isArray(f.b.parts) ? f.b.parts : []).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= most);
   if (!nums.length || nums.length > 100) return res.status(400).json({ ok: false, error: 'This upload is not valid. Try again.' });
   res.json({ ok: true, urls: await storage.signParts(f.key, f.uploadId, nums) });
 });
@@ -669,6 +755,13 @@ app.post('/projects/:id/uploads/complete', ...direct, async (req, res) => {
   }
   if (saved()) return res.json({ ok: true, files: [saved()] }); // a retry finished it while this one waited
   reserved.delete(f.uploadId);
+  // The size given at the start is only the browser's word. Check the real size in the bucket against
+  // the per-file limit and the plan, and remove the file if it doesn't fit.
+  const problem = size > MAX_UPLOAD ? `This file is over the ${LIMIT_TEXT} limit.` : spaceProblem(req.user, size);
+  if (problem) {
+    await storage.remove(f.key);
+    return res.status(413).json({ ok: false, error: problem, upgrade: '/pricing' });
+  }
   const kind = kindOf(type || '', name);
   const r = insertAsset.run(req.project.id, name, f.key, type, size, kind, 's3', req.project.id);
   const folder = cleanFolder(f.b.folder);
@@ -723,12 +816,20 @@ function logoType(buf) {
 }
 const LOGO_KINDS = { dark: 'logo_dark', light: 'logo_light' };
 const dropLogoFile = (f) => { if (f) fs.rm(path.join(BRAND, path.basename(f)), { force: true }, () => {}); };
-const profilePage = (req, extra = {}) => V.profilePage({ user: req.user, canBrand: canBrand(req.user), ...extra });
+const profilePage = (req, extra = {}) => V.profilePage({ user: req.user, canBrand: canBrand(req.user), mailOn: mail.enabled, ...extra });
 const PROFILE_NOTICES = {
   details: 'Your details are saved.', password: 'Password changed. Other devices were logged out.',
   saved: 'Brand/Studio name saved.', logo: 'Logo saved. Your deliveries show it now.', removed: 'Logo removed.',
+  details_verify: 'Your details are saved. We sent a link to your new email; open it to confirm the address.',
+  details_unsent: 'Your details are saved. Confirm your new email with the button below.',
+  verify_sent: 'We sent a confirmation link to your email. It works for 2 days.',
+  verified: 'Your email is confirmed.',
+  verify_wait: 'A link was just sent. Give it a minute, and check your spam folder.',
+  verify_limit: 'You\'ve asked for 5 links today. Try again tomorrow.',
+  verify_busy: 'Email is busy right now. Try again later.',
+  verify_failed: 'The email didn\'t go out. Try again in a minute.',
+  verify_off: 'Email is not set up on this site yet.',
 };
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 app.get('/profile', requireUser, (req, res) => {
   res.send(profilePage(req, { notice: PROFILE_NOTICES[req.query.notice] }));
@@ -737,7 +838,7 @@ app.get('/profile', requireUser, (req, res) => {
 app.get('/branding', (req, res) => res.redirect(301, '/profile#brand'));
 
 // Name and login email. A new email needs the current password, since it's how the account logs in.
-app.post('/profile/details', requireUser, (req, res) => {
+app.post('/profile/details', requireUser, async (req, res) => {
   const name = String(req.body.name || '').trim().slice(0, 80);
   const email = String(req.body.email || '').trim().toLowerCase().slice(0, 254);
   const values = { name, email };
@@ -756,9 +857,19 @@ app.post('/profile/details', requireUser, (req, res) => {
     if (db.prepare('SELECT 1 FROM users WHERE email = ? AND id != ?').get(email, req.user.id))
       return fail(400, 'Another account already uses that email.');
   }
-  db.prepare('UPDATE users SET name = ?, email = ? WHERE id = ?').run(name, email, req.user.id);
-  if (email !== req.user.email) billing.updateCustomerEmail(req.user, email);
-  res.redirect('/profile?notice=details');
+  const changed = email !== req.user.email;
+  // A new email has to be confirmed again before delivery emails can go out.
+  db.prepare('UPDATE users SET name = ?, email = ?, email_verified = ? WHERE id = ?').run(name, email, changed ? 0 : req.user.email_verified, req.user.id);
+  if (!changed) return res.redirect('/profile?notice=details');
+  billing.updateCustomerEmail(req.user, email);
+  const why = await sendVerification(req, { ...req.user, email, name });
+  res.redirect(`/profile?notice=${why ? 'details_unsent' : 'details_verify'}#details`);
+});
+
+app.post('/profile/verify', requireUser, async (req, res) => {
+  if (req.user.email_verified) return res.redirect('/profile?notice=verified#details');
+  const why = await sendVerification(req, req.user);
+  res.redirect(`/profile?notice=verify_${why || 'sent'}#details`);
 });
 
 // A new password logs out every other session, in case the old one was known to someone else.
