@@ -564,7 +564,7 @@ html.am-lock, html.am-lock body { overflow: hidden; }
 
 /* ===== Client delivery page ===== */
 .delivery { background: #111113; }
-.am-studio { font: 500 17px var(--geist); letter-spacing: -.01em; white-space: nowrap; height: auto; }
+.am-logo.am-studio { font: 500 17px var(--geist); letter-spacing: -.01em; white-space: nowrap; height: auto; }
 .am-cta svg { margin: 0 6px 0 -2px; }
 .dl-hero::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 160px; z-index: 0; pointer-events: none; background: linear-gradient(rgba(0,0,0,.45), transparent); }
 
@@ -696,7 +696,7 @@ html.am-lock, html.am-lock body { overflow: hidden; }
 .lb-prev { grid-column: 1; } .lb-next { grid-column: 3; }
 
 @media (max-width: 767px) {
-  .am-studio { font-size: 16px; }
+  .am-logo.am-studio { font-size: 16px; }
   .dl-facts { grid-template-columns: 1fr 1fr; }
   .dl-facts div { padding-bottom: 18px; }
   .dl-board { padding: 8px; border-radius: 16px; }
@@ -918,6 +918,11 @@ html.am-lock, html.am-lock body { overflow: hidden; }
 .profile-pass .span2, .profile-pass .form-end { grid-column: 1 / -1; }
 @media (max-width: 640px) { .profile-pass { grid-template-columns: 1fr; } }
 a.am-studio:hover { color: var(--amc); }
+/* Signed-in header: studio name reads like the home page's "Log in" link */
+.am-app .am-right .am-studio { color: var(--amc); }
+.am-app .am-right .am-studio:hover { opacity: .65; }
+.am-m-who { display: flex; align-items: center; gap: 20px; min-width: 0; }
+.am-m-who a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .brand-head { display: flex; align-items: center; gap: 12px; }
 .brand-head .tag { margin: 0; }
 .logo-slots { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; }

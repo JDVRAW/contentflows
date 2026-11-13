@@ -82,26 +82,54 @@ function amNav({ base = '', theme = 'dark' } = {}) {
 </header>`;
 }
 
-// The home page header for signed-in creators: same bar, sliding dot and mobile drawer,
-// with the app's own links (the home page sends signed-in visitors to their deliveries).
+// Icons for the signed-in menu, drawn like the home page ones: line art with one brand-red accent.
+const APP_ICONS = {
+  deliveries: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="2" stroke="currentColor" stroke-width="1.4"/><rect x="13.5" y="3.5" width="7" height="7" rx="2" stroke="currentColor" stroke-width="1.4"/><rect x="3.5" y="13.5" width="7" height="7" rx="2" stroke="currentColor" stroke-width="1.4"/><rect class="ic-acc" x="14" y="14" width="6.5" height="6.5" rx="2" fill="#E5402A"/></svg>',
+  new: AM_ICONS.speed,
+  storage: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3.5" y="5.5" width="17" height="13" rx="3.5" stroke="currentColor" stroke-width="1.4"/><rect class="ic-acc" x="7" y="10.5" width="6" height="3" rx="1.5" fill="#E5402A"/></svg>',
+  ai: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5.5 12a6.5 6.5 0 1 1 13 0 6.5 6.5 0 0 1-13 0Z" stroke="currentColor" stroke-width="1.4"/><path class="ic-acc" d="M12 8.5l1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1 1-2.5Z" fill="#E5402A"/></svg>',
+};
+
+// The home page header for signed-in creators: same bar, sliding dot, two-column menu and mobile
+// drawer, with the app's own links. Hovering "Deliveries" opens the menu like "Product" on the home page; clicking it opens the list.
 function appNav(user, current = '') {
-  const links = [{ href: '/dashboard', label: 'Deliveries' }, { href: '/profile', label: 'Profile' }, { href: '/connect', label: 'Connect AI' }, { href: '/pricing', label: 'Plans' }];
-  const link = (l, cls) => `<a class="${cls}" href="${l.href}"${l.href === current ? ' aria-current="page"' : ''}>${l.label}</a>`;
+  const links = [{ href: '/profile', label: 'Profile' }, { href: '/connect', label: 'Connect AI' }, { href: '/pricing', label: 'Plans' }];
+  const cur = (href) => (href === current ? ' aria-current="page"' : '');
+  const rows = [
+    { href: '/dashboard', icon: 'deliveries', label: 'All deliveries', desc: 'Your projects, links and downloads' },
+    { href: '/dashboard#new', icon: 'new', label: 'New delivery', desc: 'Send a whole shoot in minutes' },
+    { href: '/pricing', icon: 'storage', label: 'Plans and storage', desc: 'See your space, get more' },
+  ];
+  const row = (r) => `<a class="am-row" href="${r.href}"><span class="am-ic">${APP_ICONS[r.icon]}</span><span class="am-txt"><b>${r.label}${ARROW}</b><small>${r.desc}</small></span></a>`;
+  const studio = esc(user.studio || user.name);
   return `
-<header class="am" id="am-header" data-theme="light">
+<header class="am am-app" id="am-header" data-theme="light">
   <div class="am-bar">
     <a class="am-logo header-logo is-brand" href="/dashboard" aria-label="ContentFlows deliveries">${LOGO}</a>
-    <nav class="am-links" id="am-links" aria-label="Main">${links.map((l) => link(l, 'am-link')).join('')}<span class="am-dot" id="am-dot" aria-hidden="true"></span></nav>
+    <nav class="am-links" id="am-links" aria-label="Main">
+      <a class="am-link" id="am-product" href="/dashboard" aria-expanded="false" aria-controls="am-drop"${cur('/dashboard')}>Deliveries</a>
+      ${links.map((l) => `<a class="am-link" href="${l.href}"${cur(l.href)}>${l.label}</a>`).join('')}
+      <span class="am-dot" id="am-dot" aria-hidden="true"></span>
+      <div class="am-drop" id="am-drop">
+        <div class="am-card">
+          <div class="am-col"><p class="am-head">Deliver</p>${rows.map(row).join('')}</div>
+          <div class="am-col am-col-right"><p class="am-head">New delivery</p>
+            <a class="am-try" href="/dashboard#new" tabindex="-1" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><span class="am-try-core">${SYMBOL('')}<em>Drop your files</em></span></a>
+            <a class="am-row" href="/connect"><span class="am-ic">${APP_ICONS.ai}</span><span class="am-txt"><b>Connect AI${ARROW}</b><small>Deliver by asking your AI assistant</small></span></a>
+          </div>
+        </div>
+      </div>
+    </nav>
     <div class="am-right">
-      <a class="am-studio" href="/profile" title="Your profile · ${esc(user.email)}">${esc(user.studio || user.name)}</a>
+      <a class="am-login am-studio" href="/profile" title="Your profile · ${esc(user.email)}">${studio}</a>
       <button class="am-login" type="submit" form="logout-form">Log out</button>
       <a class="am-cta" href="/dashboard#new">New delivery</a>
       <button class="am-burger" id="am-burger" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="am-mobile">${BURGER}</button>
     </div>
   </div>
   <div class="am-mobile" id="am-mobile" aria-hidden="true">
-    <nav class="am-m-links"><a href="/dashboard">Deliveries</a><a href="/dashboard#new">New delivery</a><a href="/profile">Profile</a><a href="/connect">Connect AI</a><a href="/pricing">Plans and storage</a></nav>
-    <div class="am-m-foot"><button class="am-m-login" type="submit" form="logout-form">Log out</button><a class="fs-cta" href="/dashboard#new">New delivery</a></div>
+    <nav class="am-m-links">${rows.map((r) => `<a href="${r.href}">${r.label}</a>`).join('')}<a href="/profile">Profile</a><a href="/connect">Connect AI</a></nav>
+    <div class="am-m-foot"><span class="am-m-who"><a class="am-m-login" href="/profile">${studio}</a><button class="am-m-login" type="submit" form="logout-form">Log out</button></span><a class="fs-cta" href="/dashboard#new">New delivery</a></div>
   </div>
 </header>
 <form id="logout-form" method="post" action="/logout" hidden></form>`;
