@@ -32,7 +32,23 @@ const THUMBS = path.join(DATA_DIR, 'thumbs');
 const BRAND = path.join(DATA_DIR, 'brand');
 
 const app = express();
-app.set('trust proxy', true);
+// Railway's proxy adds the visitor's real address as the last X-Forwarded-For entry. Trusting only
+// that one hop means a visitor can't fake their address (which the password-guessing limits rely on)
+// by sending their own X-Forwarded-For. TRUST_PROXY_HOPS changes it for a host with more proxies.
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS ?? 1));
+// Browser safety rules for every page. Routes that serve files set a stricter policy of their own.
+app.use((req, res, next) => {
+  res.set({
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Content-Security-Policy': "frame-ancestors 'none'",
+    // Delivery links are secrets: never send them to other sites as the page a visitor came from.
+    'Referrer-Policy': 'same-origin',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+  });
+  if (process.env.NODE_ENV === 'production') res.set('Strict-Transport-Security', 'max-age=31536000');
+  next();
+});
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser(SECRET));
 app.use('/static', express.static(path.join(__dirname, 'public'), { maxAge: '1h' }));
@@ -536,8 +552,14 @@ const cleanFolder = (v) => String(v || '').split(/[\\/]+/)
 const setFolder = db.prepare('UPDATE assets SET folder = ? WHERE id = ?');
 
 // Refuse before reading the body when the upload can't fit in the creator's plan.
+// The body is cut off at Content-Length, so a request that states its size can't bring more bytes than
+// that. One that doesn't state it (chunked) could bring any amount, so it is refused.
 const checkSpace = (req, res, next) => {
-  const size = Number(req.headers['content-length']) || 0;
+  const size = Number(req.headers['content-length']);
+  if (!Number.isFinite(size) || size <= 0) {
+    req.resume();
+    return req.on('end', () => res.status(411).json({ ok: false, error: 'The upload did not say how big it is. Refresh the page and try again.' }));
+  }
   const problem = spaceProblem(req.user, size);
   if (problem) {
     // Read and discard the body so the browser gets this answer instead of a dropped connection.
@@ -646,7 +668,10 @@ app.post('/projects/:id/uploads/start', ...direct, async (req, res) => {
 app.post('/projects/:id/uploads/sign', ...direct, async (req, res) => {
   const f = fileInfo(req, res);
   if (!f) return;
-  const nums = (Array.isArray(f.b.parts) ? f.b.parts : []).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= 10000);
+  // Only as many parts as the size given at the start needs (when the server still knows it).
+  const held = reserved.get(f.uploadId);
+  const most = held ? Math.max(1, Math.ceil(held.size / storage.partSizeFor(held.size))) : 10000;
+  const nums = (Array.isArray(f.b.parts) ? f.b.parts : []).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= most);
   if (!nums.length || nums.length > 100) return res.status(400).json({ ok: false, error: 'This upload is not valid. Try again.' });
   res.json({ ok: true, urls: await storage.signParts(f.key, f.uploadId, nums) });
 });
@@ -669,6 +694,13 @@ app.post('/projects/:id/uploads/complete', ...direct, async (req, res) => {
   }
   if (saved()) return res.json({ ok: true, files: [saved()] }); // a retry finished it while this one waited
   reserved.delete(f.uploadId);
+  // The size given at the start is only the browser's word. Check the real size in the bucket against
+  // the per-file limit and the plan, and remove the file if it doesn't fit.
+  const problem = size > MAX_UPLOAD ? `This file is over the ${LIMIT_TEXT} limit.` : spaceProblem(req.user, size);
+  if (problem) {
+    await storage.remove(f.key);
+    return res.status(413).json({ ok: false, error: problem, upgrade: '/pricing' });
+  }
   const kind = kindOf(type || '', name);
   const r = insertAsset.run(req.project.id, name, f.key, type, size, kind, 's3', req.project.id);
   const folder = cleanFolder(f.b.folder);
