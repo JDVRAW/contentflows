@@ -83,6 +83,33 @@
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setOpen(false, true); setMobile(false); } });
   document.addEventListener('click', (e) => { if (open && !links.contains(e.target)) setOpen(false, true); });
 
+  // Account dropdown (signed-in header): opens on hover like the menu above, click toggles,
+  // leaving schedules a close after 100ms so the pointer can reach the card.
+  const acct = document.getElementById('am-acct');
+  const acctBtn = document.getElementById('am-acct-btn');
+  let aOpen = false, aT = 0, aVia = '';
+  function setAcct(on, now) {
+    if (!acct) return;
+    clearTimeout(aT);
+    if (!on && !now) { aT = setTimeout(() => setAcct(false, true), 100); return; }
+    if (aOpen === on) return;
+    aOpen = on;
+    acct.classList.toggle('open', on);
+    acctBtn.setAttribute('aria-expanded', String(on));
+  }
+  if (acct && acctBtn) {
+    acct.addEventListener('mouseenter', () => { if (!aOpen) aVia = 'hover'; setAcct(true); setOpen(false, true); });
+    acct.addEventListener('mouseleave', () => setAcct(false));
+    acctBtn.addEventListener('click', () => {
+      if (aOpen && aVia === 'hover') { aVia = 'click'; return; } // already opened by hover: keep it open
+      aVia = 'click'; setAcct(!aOpen, true);
+    });
+    acct.addEventListener('focusout', (e) => { if (!acct.contains(e.relatedTarget)) setAcct(false, true); });
+    links.addEventListener('mouseenter', () => setAcct(false, true));
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && aOpen) { setAcct(false, true); acctBtn.focus(); } });
+    document.addEventListener('click', (e) => { if (aOpen && !acct.contains(e.target)) setAcct(false, true); });
+  }
+
   // Mobile drawer
   let mOpen = false;
   function setMobile(on) {

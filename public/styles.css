@@ -918,9 +918,35 @@ html.am-lock, html.am-lock body { overflow: hidden; }
 .profile-pass .span2, .profile-pass .form-end { grid-column: 1 / -1; }
 @media (max-width: 640px) { .profile-pass { grid-template-columns: 1fr; } }
 a.am-studio:hover { color: var(--amc); }
-/* Signed-in header: studio name reads like the home page's "Log in" link */
-.am-app .am-right .am-studio { color: var(--amc); }
-.am-app .am-right .am-studio:hover { opacity: .65; }
+/* Signed-in header: the studio name opens an account dropdown, styled like the home page menu card */
+.am-acct { position: relative; }
+.am-acct-btn { display: flex; align-items: center; gap: 6px; height: 28px; max-width: 200px; padding: 0; border: 0; background: none; color: var(--amc);
+  font: 400 14px var(--geist); cursor: pointer; }
+.am-acct-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.am-acct-btn svg { flex: none; opacity: .6; transition: transform .45s var(--am-spring); }
+.am-acct.open .am-acct-btn svg { transform: rotate(180deg); }
+.am-acct-btn:hover span { opacity: .65; }
+.am-acct-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.am-acct-drop { position: absolute; top: 100%; right: -14px; width: 252px; padding-top: 14px; pointer-events: none; }
+.am-acct.open .am-acct-drop { pointer-events: auto; }
+.am-acct-card { padding: 6px; border-radius: 18px; background: var(--am-card); color: var(--amc); box-shadow: 0 0 0 1px var(--am-faint), 0 24px 60px rgba(0,0,0,.22);
+  transform-origin: 100% 0; opacity: 0; transform: translateY(-10px) scale(.98); filter: blur(2px); visibility: hidden;
+  transition: opacity .69s var(--am-spring), transform .69s var(--am-spring), filter .69s var(--am-spring), visibility 0s .3s; }
+.am-acct.open .am-acct-card { opacity: 1; transform: none; filter: blur(0); visibility: visible; transition-delay: 0s; }
+.am-acct-who { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px 12px; margin-bottom: 4px; border-bottom: 1px solid var(--am-faint); color: var(--amc); }
+.am-acct-who b { font: 500 14px var(--geist); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.am-acct-who small { font: 400 12.5px var(--geist); color: var(--am-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.am-acct-item { display: flex; align-items: center; gap: 12px; width: 100%; padding: 9px 12px; border: 0; border-radius: 12px; background: none; color: var(--amc);
+  font: 400 14px var(--geist); text-align: left; cursor: pointer; transition: background .15s; }
+.am-acct-item:hover, .am-acct-item:focus-visible, .am-acct-who:hover, .am-acct-who:focus-visible { background: var(--am-faint); outline: none; }
+.am-acct-who:hover { border-radius: 12px; }
+.am-acct-item[aria-current] { background: var(--am-faint); }
+.am-acct-item svg { flex: none; width: 18px; height: 18px; overflow: visible; }
+.am-acct-item .ic-acc { transform-box: fill-box; transform-origin: center; transition: transform .45s var(--spring); }
+.am-acct-item:hover .ic-acc { transform: translate(-1px, -1px) scale(1.12); }
+.am-acct-sep { display: block; height: 1px; margin: 4px 0; background: var(--am-faint); }
+@media (max-width: 900px) { .am-acct { display: none; } }
+@media (prefers-reduced-motion: reduce) { .am-acct-card, .am-acct-btn svg { transition: none !important; } }
 .am-m-who { display: flex; align-items: center; gap: 20px; min-width: 0; }
 .am-m-who a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .brand-head { display: flex; align-items: center; gap: 12px; }
