@@ -61,7 +61,7 @@ function mcpRouter(ctx) {
       instructions: 'ContentFlows delivers final photoshoots, films and commercials to clients through one private link. '
         + 'A "delivery" is one project for one client: its files, a share link, and settings (password, expiry, downloads). '
         + 'Typical flow: create_delivery, add_file_from_url for each file, then give the user the share link from the result. '
-        + 'Always show the share link exactly as returned.',
+        + 'Always show the share link exactly as returned. Before remove_file, new_share_link or delete_delivery, confirm with the user.',
     });
     const link = (p) => `${origin}/d/${p.share_token}`;
     const own = (id) => db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(id, user.id);
@@ -255,6 +255,23 @@ function mcpRouter(ctx) {
       db.prepare('DELETE FROM assets WHERE id = ?').run(a.id);
       removeAssetFiles(a);
       return ok({ removed: { id: a.id, name: a.original_name }, delivery: summary(own(p.id)) });
+    });
+
+    server.registerTool('delete_delivery', {
+      title: 'Delete a delivery',
+      description: 'Delete a whole delivery for good: all its files, folders, folder links and activity. Its share link stops '
+        + 'working right away and the space is freed. This can\'t be undone. Confirm the title with the user first.',
+      inputSchema: { delivery_id: z.number().int().describe('Delivery id from list_deliveries') },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    }, async ({ delivery_id }) => {
+      const p = own(delivery_id);
+      if (!p) return fail(`No delivery with id ${delivery_id}.`);
+      const files = db.prepare('SELECT * FROM assets WHERE project_id = ?').all(p.id);
+      const freed = files.reduce((n, a) => n + a.size, 0);
+      // Same as deleting it in the app: the row goes (files, folders and events cascade), then the stored bytes.
+      db.prepare('DELETE FROM projects WHERE id = ?').run(p.id);
+      files.forEach(removeAssetFiles);
+      return ok({ deleted: { id: p.id, title: p.title, client_name: p.client_name, files: files.length, freed: fmtSize(freed) } });
     });
 
     server.registerTool('new_share_link', {
