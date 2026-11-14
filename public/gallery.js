@@ -7,6 +7,24 @@
   const tiles = [...document.querySelectorAll('.dl-tile')];
   let open = () => {};
 
+  // ---- Hero cover: fill the screen when the frame roughly matches it, otherwise show it whole ----
+  // A portrait photo stretched across a desktop screen only shows a band through the middle,
+  // so when filling would cut away more than about a quarter of its height, show all of it instead.
+  // Wide frames on a tall phone keep filling the screen, as before.
+  const hero = document.querySelector('.dl-hero');
+  const heroMedia = hero && hero.querySelector('.fs-media');
+  if (heroMedia) {
+    const fit = () => {
+      const w = heroMedia.naturalWidth || heroMedia.videoWidth, h = heroMedia.naturalHeight || heroMedia.videoHeight;
+      if (!w || !h) return;
+      const screen = hero.clientWidth / hero.clientHeight, frame = w / h;
+      hero.classList.toggle('is-fit', frame / screen < 0.75);
+    };
+    heroMedia.addEventListener(heroMedia.tagName === 'VIDEO' ? 'loadedmetadata' : 'load', fit);
+    if (heroMedia.complete || heroMedia.readyState >= 1) fit();
+    addEventListener('resize', fit);
+  }
+
   // ---- Filter: All / Photos / Films, with a dot that slides under the active option ----
   const filter = document.querySelector('.dl-filter');
   let mode = 'all';

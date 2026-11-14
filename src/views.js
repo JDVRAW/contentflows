@@ -871,6 +871,7 @@ function deliveryPage({ project: p, assets, studio, brand, host = '', folderOrde
   return layout({ title: p.title, bodyClass: 'delivery', scripts: ['/static/gallery.js'],
     header: deliveryHeader({ studio, brand, links, cta: canDl ? { href: `${base}/zip`, label: `Download all` } : null }), body: `
 <section class="fs-hero dl-hero" id="top" data-header-theme="light">
+  ${cover && cover.thumb_name ? `<div class="fs-backdrop" style="background-image:url('${base}/thumb/${cover.id}')" aria-hidden="true"></div>` : ''}
   ${cover ? (cover.kind === 'video'
     ? `<video class="fs-media" src="${base}/media/${cover.id}"${cover.thumb_name ? ` poster="${base}/thumb/${cover.id}"` : ''} autoplay muted loop playsinline preload="metadata"></video>`
     : `<img class="fs-media" src="${base}/media/${cover.id}" alt="">`) : ''}

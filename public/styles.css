@@ -566,6 +566,12 @@ html.am-lock, html.am-lock body { overflow: hidden; }
 .delivery { background: #111113; }
 .am-logo.am-studio { font: 500 17px var(--geist); letter-spacing: -.01em; white-space: nowrap; height: auto; }
 .am-cta svg { margin: 0 6px 0 -2px; }
+/* A portrait or square cover on a wide screen would be cropped to a slice (a face cut off at the chin),
+   so gallery.js switches the hero to show the whole frame, centred over a blurred, dimmed copy of itself. */
+.fs-backdrop { display: none; position: absolute; inset: -60px; z-index: 0; background: center / cover no-repeat;
+  filter: blur(40px) brightness(.55) saturate(1.1); }
+.dl-hero.is-fit .fs-backdrop { display: block; }
+.dl-hero.is-fit .fs-media { object-fit: contain; }
 .dl-hero::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 160px; z-index: 0; pointer-events: none; background: linear-gradient(rgba(0,0,0,.45), transparent); }
 
 .dl-intro .lp-inner { display: flex; flex-direction: column; }
