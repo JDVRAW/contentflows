@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { PLANS } = require('./plans');
 const retention = require('./retention');
+const { thumbRatio } = require('./media');
 // Inline brand logo so the wordmark and three squares follow the header colour; the red square and dot stay brand red.
 const LOGO = fs.readFileSync(path.join(__dirname, '..', 'public', 'brand', 'contentflows-logo-color.svg'), 'utf8')
   .replace(/<title>.*?<\/title>/, '')
@@ -889,6 +890,9 @@ function deliveryPage({ project: p, assets, studio, brand, host = '', folderOrde
     : 'This link stays live until your creator turns it off.';
   const items = visual.map((a) => ({ id: a.id, kind: a.kind, name: a.original_name, size: a.size, src: `${base}/media/${a.id}`, poster: a.thumb_name ? `${base}/thumb/${a.id}` : null, dl: p.allow_download ? `${base}/download/${a.id}` : null }));
   const ext = (n) => esc((n.split('.').pop() || 'file').slice(0, 4).toUpperCase());
+  // Each tile's real shape (width / height of its thumbnail), so vertical photos and films show whole.
+  // Extreme panoramas or slivers are kept within reason; the viewer still shows them in full.
+  const tileShape = (a) => { const r = thumbRatio(a.thumb_name); return r ? ` data-ar="${Math.min(3, Math.max(0.4, r))}"` : ''; };
   const links = [...(visual.length ? [{ href: '#work', label: 'Gallery' }] : []), ...(others.length ? [{ href: '#files', label: 'Files' }] : [])];
   const message = p.message || `Your ${type.toLowerCase()} is ready. <span>Everything here is full quality, exactly as it left the studio.</span>`;
   const noteHtml = p.message ? esc(p.message).replace(/\n/g, '<br>') : message;
@@ -933,7 +937,7 @@ ${visual.length ? `<section class="lp lp-light dl-gallery" id="work" data-header
         ${filters}
       </div>
       ${(() => { let i = 0; return visualGroups.map((g) => `<div class="dl-group${g.folder ? ' collapsed' : ''}" data-folder="${esc(g.folder)}">${folderHead(g, 'div')}<div class="dl-grid">${g.items.map((a) => `
-        <figure class="dl-tile ${a.kind}" data-index="${i++}" data-id="${a.id}" data-kind="${a.kind}" data-size="${a.size}" tabindex="0" aria-label="Open ${esc(a.original_name)}">
+        <figure class="dl-tile ${a.kind}" data-index="${i++}"${tileShape(a)} data-id="${a.id}" data-kind="${a.kind}" data-size="${a.size}" tabindex="0" aria-label="Open ${esc(a.original_name)}">
           ${a.thumb_name ? `<img loading="lazy" src="${base}/thumb/${a.id}" alt="">` : `<div class="dl-noimg">${ext(a.original_name)}</div>`}
           ${a.kind === 'video' ? '<span class="dl-play" aria-hidden="true"></span>' : ''}
           ${canDl ? `<button type="button" class="dl-check" aria-pressed="false" aria-label="Select ${esc(a.original_name)}"></button>` : ''}
