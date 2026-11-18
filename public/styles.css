@@ -978,3 +978,21 @@ a.am-studio:hover { color: var(--amc); }
 .file-btn { cursor: pointer; }
 .plan-brand { margin: -4px 0 12px; }
 @media (max-width: 640px) { .logo-slots { grid-template-columns: 1fr; } }
+
+/* Sorting the files in a folder: the Sort menu, and the arrows under each file in a custom order */
+.folder-sort { margin: 0 0 0 auto; }
+.folder-sort ~ .folder-actions { margin-left: 16px; }
+.folder-sort label { display: flex; align-items: center; gap: 8px; margin: 0; }
+.folder-sort select { width: auto; margin: 0; padding: 5px 28px 5px 10px; font: 400 13px var(--geist); }
+.files-sort { display: flex; margin: 4px 0 12px; }
+.asset-actions .nudge { display: inline-flex; gap: 4px; }
+.asset-actions .nudge form { margin: 0; }
+.asset-actions .nudge .order-btn { width: 24px; height: 22px; font-size: 13px; }
+.asset-grid[data-custom] .asset[draggable="true"] { cursor: grab; }
+@media (max-width: 760px) {
+  .folder-sort ~ .folder-actions { margin-left: 0; }
+  .folder-sort select { max-width: 140px; }
+  .folder-sort .muted { display: none; }
+}
+.asset-actions:has(.nudge) { gap: 10px; align-items: center; flex-wrap: wrap; }
+.asset-actions:has(.nudge) .link { white-space: nowrap; }
