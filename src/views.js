@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { PLANS } = require('./plans');
+const retention = require('./retention');
 // Inline brand logo so the wordmark and three squares follow the header colour; the red square and dot stay brand red.
 const LOGO = fs.readFileSync(path.join(__dirname, '..', 'public', 'brand', 'contentflows-logo-color.svg'), 'utf8')
   .replace(/<title>.*?<\/title>/, '')
@@ -396,7 +397,8 @@ function dashboard({ user, projects, usage }) {
       <div class="card-body"><span class="tag">${esc(TYPES[p.type] || p.type)}</span>
       <h3>${esc(p.title)}</h3>
       <p class="muted">${esc(p.client_name || 'No client set')} · ${p.asset_count} file${p.asset_count === 1 ? '' : 's'} · ${fmtSize(p.total_size || 0)}</p>
-      <p class="muted small">${p.download_count} download${p.download_count === 1 ? '' : 's'} · ${p.view_count} view${p.view_count === 1 ? '' : 's'}</p></div>
+      <p class="muted small">${p.download_count} download${p.download_count === 1 ? '' : 's'} · ${p.view_count} view${p.view_count === 1 ? '' : 's'}</p>
+      ${p.auto_delete && p.delete_at ? `<p class="small deleting">Deletes ${fmtDate(p.delete_at)}</p>` : ''}</div>
     </a>`).join('')}</div>`
   : `<div class="empty"><h2>No deliveries yet</h2><p class="muted">Create a delivery, upload the finals, and send your client the link.</p></div>`}
 </main>
@@ -470,7 +472,11 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
   <a class="btn ghost" href="/d/${p.share_token}" target="_blank">Preview as client</a></div>
 
   <section class="share" id="share">
-    <div><h3>Delivery link</h3><p class="muted small">${p.password_hash ? 'Password protected' : 'Anyone with the link can view'}${p.expires_at ? ` · expires ${fmtDate(p.expires_at)}` : ''}${p.allow_download ? '' : ' · downloads off'}</p></div>
+    <div><h3>Delivery link</h3><p class="muted small">${p.password_hash ? 'Password protected' : 'Anyone with the link can view'}${p.expires_at ? ` · expires ${fmtDate(p.expires_at)}` : ''}${p.allow_download ? '' : ' · downloads off'}${p.auto_delete && !p.delete_at ? ` · deletes ${retention.daysText} after the client's first download` : ''}</p></div>
+    ${p.auto_delete && p.delete_at ? `<div class="auto-delete">
+      <p><b>Deletes ${fmtDate(p.delete_at)}.</b> Your client downloaded this delivery, so it and all its files will be removed for good on ${fmtDate(p.delete_at)}.</p>
+      <form method="post" action="/projects/${p.id}/keep"><button class="btn ghost small">Keep this delivery</button></form>
+    </div>` : ''}
     <div class="copy"><input readonly value="${esc(link)}" id="share-link"><button class="btn" data-copy="#share-link">Copy</button></div>
     <div class="stats"><div><b>${stats.views}</b><span>views</span></div><div><b>${stats.downloads}</b><span>downloads</span></div><div><b>${stats.last ? fmtDate(stats.last) : '—'}</b><span>last activity</span></div></div>
     ${mailBox(p, mail)}
@@ -575,6 +581,7 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
       <div class="row"><label>Password <span class="muted">${p.password_hash ? '(set, leave blank to keep)' : '(optional)'}</span><input type="password" name="password" autocomplete="new-password"></label>
       <label>Expires on <span class="muted">(optional)</span><input type="date" name="expires_at" value="${esc(p.expires_at || '')}"></label></div>
       <label class="check"><input type="checkbox" name="allow_download" ${p.allow_download ? 'checked' : ''}> Allow client downloads</label>
+      <label class="check"><input type="checkbox" name="auto_delete" ${p.auto_delete ? 'checked' : ''}> Delete this delivery and its files ${retention.daysText} after the client's first download${p.auto_delete && p.delete_at ? ` <span class="muted">(on ${fmtDate(p.delete_at)})</span>` : ''}</label>
       ${p.password_hash ? '<label class="check"><input type="checkbox" name="remove_password"> Remove password</label>' : ''}
       <div class="row form-end"><button class="btn">Save settings</button></div>
     </form>
@@ -860,6 +867,16 @@ function deliveryPage({ project: p, assets, studio, brand, host = '', folderOrde
   const others = otherGroups.flatMap((g) => g.items);
   const total = assets.reduce((s, a) => s + a.size, 0);
   const type = TYPES[p.type] || 'Delivery';
+  // What the client is told about how long the files stay: the expiry or deletion date, whichever comes
+  // first, or (before any download) that the countdown starts with the first download.
+  const until = retention.lastDay(p);
+  const waiting = !!p.auto_delete && !p.delete_at && !!p.allow_download;
+  const availFact = until ? `Until ${fmtDate(until.at)}` : waiting ? `${retention.daysText} after download` : 'No expiry';
+  const endNote = until && until.deleting
+    ? `These files will be removed on ${fmtDate(until.at)}. Save what you need before then.`
+    : until ? `Available until ${fmtDate(until.at)}. Save what you need before then.${waiting ? ` Files are removed ${retention.daysText} after your first download.` : ''}`
+    : waiting ? `Files are removed ${retention.daysText} after your first download, so save everything you need.`
+    : 'This link stays live until your creator turns it off.';
   const items = visual.map((a) => ({ id: a.id, kind: a.kind, name: a.original_name, size: a.size, src: `${base}/media/${a.id}`, poster: a.thumb_name ? `${base}/thumb/${a.id}` : null, dl: p.allow_download ? `${base}/download/${a.id}` : null }));
   const ext = (n) => esc((n.split('.').pop() || 'file').slice(0, 4).toUpperCase());
   const links = [...(visual.length ? [{ href: '#work', label: 'Gallery' }] : []), ...(others.length ? [{ href: '#files', label: 'Files' }] : [])];
@@ -890,7 +907,7 @@ function deliveryPage({ project: p, assets, studio, brand, host = '', folderOrde
       <div><dt>Files</dt><dd>${assets.length}</dd></div>
       <div><dt>Total size</dt><dd>${fmtSize(total)}</dd></div>
       <div><dt>Quality</dt><dd>Original</dd></div>
-      <div><dt>Available</dt><dd>${p.expires_at ? `Until ${fmtDate(p.expires_at)}` : 'No expiry'}</dd></div>
+      <div><dt>Available</dt><dd>${availFact}</dd></div>
     </dl>
   </div>
 </section>
@@ -935,7 +952,7 @@ ${others.length ? `<section class="lp lp-light dl-files" id="files" data-header-
     <p class="lp-label">(That's everything)</p>
     <h2 class="end-title">${esc(p.title)}<br><span>delivered by ${esc(studio)}.</span></h2>
     ${canDl ? `<a class="fs-cta" href="${base}/zip">Download all · ${fmtSize(total)}</a>` : ''}
-    <p class="end-sub">${p.expires_at ? `Available until ${fmtDate(p.expires_at)}. Save what you need before then.` : 'This link stays live until your creator turns it off.'}</p>
+    <p class="end-sub">${endNote}</p>
   </div>
   <div class="end-foot"><span class="fs-mono">© ${esc(studio)}</span><a class="dl-made" href="/" aria-label="Made with ContentFlows">Made with <span class="foot-logo">${LOGO}</span></a></div>
 </footer>
