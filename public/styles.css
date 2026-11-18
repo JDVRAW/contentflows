@@ -109,6 +109,10 @@ dialog::backdrop { background: rgba(0,0,0,.6); backdrop-filter: blur(4px); }
 .auto-delete { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; padding: 12px 14px; border-radius: 10px; background: color-mix(in srgb, var(--danger) 8%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent); }
 .auto-delete p { margin: 0; font-size: 14px; }
 .auto-delete b { color: var(--danger); }
+.auto-delete-field { display: grid; gap: 8px; }
+.auto-delete-field .days { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 0 26px; font-weight: 400; font-size: 14px; color: var(--muted); }
+.auto-delete-field .days input { width: 76px; margin: 0; }
+.auto-delete-field:not(:has(input[name=auto_delete]:checked)) .days { opacity: .45; }
 .card .deleting { margin: 4px 0 0; color: var(--danger); }
 .share-mail { grid-column: 1 / -1; display: grid; gap: 6px; padding-top: 16px; border-top: 1px solid var(--line); }
 .share-mail label { font-weight: 600; margin: 0; }
