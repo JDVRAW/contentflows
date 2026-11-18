@@ -264,12 +264,13 @@ app.get('/projects/:id', requireUser, ownProject, (req, res) => {
   const stats = db.prepare(`SELECT
       SUM(type = 'view') AS views, SUM(type IN ('download', 'zip')) AS downloads, MAX(CASE WHEN type != 'email' THEN created_at END) AS last
     FROM events WHERE project_id = ?`).get(p.id);
-  const rows = db.prepare('SELECT path, collapsed, share_token, position FROM folders WHERE project_id = ? ORDER BY id').all(p.id);
+  const rows = db.prepare('SELECT path, collapsed, share_token, position, sort FROM folders WHERE project_id = ? ORDER BY id').all(p.id);
   const folders = rows.map((r) => r.path).filter(Boolean);
   const collapsed = rows.filter((r) => r.collapsed).map((r) => r.path);
   const folderOrder = rows.filter((r) => r.path && r.position !== null).sort((a, b) => a.position - b.position).map((r) => r.path);
   const folderLinks = Object.fromEntries(rows.filter((r) => r.share_token && r.path).map((r) => [r.path, r.share_token]));
-  res.send(V.projectPage({ user: req.user, project: p, assets, folders, collapsed, folderLinks, folderOrder, saved: req.query.saved, notice: req.query.notice,
+  const sorts = Object.fromEntries(rows.filter((r) => r.sort).map((r) => [r.path, r.sort]));
+  res.send(V.projectPage({ user: req.user, project: p, assets, folders, collapsed, folderLinks, folderOrder, sorts, saved: req.query.saved, notice: req.query.notice,
     mail: { enabled: mail.enabled, partlySet: mail.partlySet, sent: !!req.query.emailed, error: req.query.mail_error, maxTo: MAIL_MAX_TO },
     stats: { views: stats.views || 0, downloads: stats.downloads || 0, last: stats.last },
     origin: originOf(req), direct: storage.enabled, storageMissing: storage.partlySet, usage: usage(req.user) }));
@@ -425,6 +426,74 @@ app.post('/projects/:id/folders/order', requireUser, ownProject, (req, res) => {
   back(req, res);
 });
 
+// How each folder's files are ordered, as { path: sort } ('' = loose files). Through a folder link the
+// paths are read from inside that folder, like the files themselves ("BTS" becomes '', "BTS/Raw" "Raw").
+function sortsOf(projectId, scope = null) {
+  const out = {};
+  for (const r of db.prepare('SELECT path, sort FROM folders WHERE project_id = ? AND sort IS NOT NULL').all(projectId)) {
+    if (!scope) out[r.path] = r.sort;
+    else if (r.path === scope) out[''] = r.sort;
+    else if (r.path.startsWith(scope + '/')) out[r.path.slice(scope.length + 1)] = r.sort;
+  }
+  // Inside a folder link the folder's own files are the loose ones, so they keep the folder's default (name).
+  if (scope && !out['']) out[''] = 'name';
+  return out;
+}
+// The files of one folder ('' = loose files) in the order they show now.
+function folderFiles(projectId, folder) {
+  const assets = db.prepare('SELECT * FROM assets WHERE project_id = ? AND COALESCE(folder, \'\') = ?').all(projectId, folder);
+  return V.byFolder(assets, [], [], sortsOf(projectId)).find((g) => g.folder === folder)?.items || [];
+}
+// Save a folder's custom order: its files take the places they already hold in the project's list,
+// in the new order, and every file is renumbered 1, 2, 3… so no two share a place.
+function placeFiles(projectId, folder, ids) {
+  const all = db.prepare('SELECT id, folder FROM assets WHERE project_id = ? ORDER BY position, id').all(projectId);
+  const mine = new Set(all.filter((a) => (a.folder || '') === folder).map((a) => a.id));
+  const wanted = [...new Set(ids)].filter((id) => mine.has(id));
+  const rest = [...mine].filter((id) => !wanted.includes(id));
+  const queue = [...wanted, ...rest.filter((id) => !wanted.includes(id))];
+  const next = all.map((a) => (mine.has(a.id) ? queue.shift() : a.id));
+  const set = db.prepare('UPDATE assets SET position = ? WHERE id = ?');
+  db.transaction(() => next.forEach((id, i) => set.run(i + 1, id)))();
+}
+const setSort = db.prepare(`INSERT INTO folders (project_id, path, sort) VALUES (?, ?, ?)
+  ON CONFLICT (project_id, path) DO UPDATE SET sort = excluded.sort`);
+
+// Pick how a folder's files are ordered. Switching to custom starts from the order showing now,
+// so the creator drags from what they see instead of from upload order.
+app.post('/projects/:id/folders/sort', requireUser, ownProject, (req, res) => {
+  const raw = String(req.body?.folder ?? '');
+  const folder = raw ? cleanFolder(raw) : '';
+  const sort = String(req.body?.sort || '');
+  if (folder === null || !V.SORTS[sort]) return req.xhr ? res.status(400).json({ ok: false }) : back(req, res);
+  if (sort === 'custom') placeFiles(req.project.id, folder, folderFiles(req.project.id, folder).map((a) => a.id));
+  setSort.run(req.project.id, folder, sort);
+  back(req, res);
+});
+
+// Save a folder's custom order after the creator drags files around (ids in their new order).
+app.post('/projects/:id/assets/order', requireUser, ownProject, (req, res) => {
+  const raw = String(req.body?.folder ?? '');
+  const folder = raw ? cleanFolder(raw) : '';
+  const ids = [].concat(req.body?.ids ?? []).flatMap((v) => String(v).split(',')).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  if (folder === null || !ids.length) return req.xhr ? res.status(400).json({ ok: false }) : back(req, res);
+  placeFiles(req.project.id, folder, ids);
+  setSort.run(req.project.id, folder, 'custom');
+  req.xhr ? res.json({ ok: true }) : back(req, res);
+});
+
+// Move one file a place earlier or later in a custom-ordered folder (the arrows under each file).
+app.post('/projects/:id/assets/:aid/nudge', requireUser, ownProject, (req, res) => {
+  const a = db.prepare('SELECT id, folder FROM assets WHERE id = ? AND project_id = ?').get(req.params.aid, req.project.id);
+  if (!a) return back(req, res);
+  const ids = folderFiles(req.project.id, a.folder || '').map((x) => x.id);
+  const i = ids.indexOf(a.id), j = i + (req.body?.dir === 'up' ? -1 : 1);
+  if (i < 0 || j < 0 || j >= ids.length) return back(req, res);
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  placeFiles(req.project.id, a.folder || '', ids);
+  back(req, res);
+});
+
 // Rename a folder (only its own name; it stays inside the same parent). Its files, the folders
 // inside it, its link, its place in the order and whether it's closed all carry over.
 app.post('/projects/:id/folders/rename', requireUser, ownProject, (req, res) => {
@@ -481,7 +550,9 @@ app.post('/projects/:id/assets/move', requireUser, ownProject, (req, res) => {
   if (req.body?.folder === '__new' && !target) return back(req, res, 'Give the new folder a name.');
   db.transaction(() => {
     if (target) saveFolder.run(req.project.id, target);
-    picked.forEach((a) => setFolder.run(target, a.id));
+    // Moved files land at the end of the folder they go to (in a custom order, they then sit last).
+    const end = db.prepare('UPDATE assets SET position = (SELECT COALESCE(MAX(position), 0) + 1 FROM assets WHERE project_id = ?) WHERE id = ?');
+    picked.sort((x, y) => (x.position - y.position) || (x.id - y.id)).forEach((a) => { setFolder.run(target, a.id); end.run(req.project.id, a.id); });
   })();
   back(req, res, `Moved ${plural(picked.length, 'file')} to ${target ? `“${target.split('/').join(' / ')}”` : 'no folder'}.`);
 });
@@ -920,7 +991,7 @@ app.get('/d/:token', loadDelivery, (req, res) => {
   const assets = deliveryAssets(req);
   // Through a folder link, the order is the same but read from inside that folder.
   const order = folderOrderOf(p.id).filter((f) => !req.scope || f.startsWith(req.scope + '/')).map((f) => (req.scope ? f.slice(req.scope.length + 1) : f));
-  res.send(V.deliveryPage({ project: p, assets, studio, brand, host: req.get('host'), folderOrder: order }));
+  res.send(V.deliveryPage({ project: p, assets, studio, brand, host: req.get('host'), folderOrder: order, sorts: sortsOf(p.id, req.scope) }));
 });
 
 app.post('/d/:token/unlock', loadDelivery, (req, res) => {

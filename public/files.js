@@ -89,25 +89,49 @@
   });
 
   // Dragging: a file (or every picked file, when the dragged one is picked) onto a folder.
-  let dragIds = null;
+  // Inside a folder sorted by "Custom order", dragging a file among its own files reorders them instead.
+  let dragIds = null, reorder = null, dropped = false;
+  const post = (url, body) => fetch(url, {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+    body: new URLSearchParams(body),
+  });
   root.addEventListener('dragstart', (e) => {
     const card = e.target.closest?.('.asset');
     if (!card) return;
     const box = card.querySelector('.pick input');
     dragIds = box.checked ? picked().map((b) => b.value) : [box.value];
     root.querySelectorAll('.asset').forEach((a) => dragIds.includes(a.dataset.id) && a.classList.add('dragging'));
+    const grid = card.closest('.asset-grid');
+    const own = [...grid.querySelectorAll('.asset')];
+    // Reordering needs every dragged file to come from this one custom-ordered folder.
+    reorder = grid.hasAttribute('data-custom') && dragIds.every((id) => own.some((a) => a.dataset.id === id))
+      ? { grid, before: own.map((a) => a.dataset.id) } : null;
+    dropped = false;
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/x-contentflows-files', dragIds.join(','));
   });
   root.addEventListener('dragend', () => {
-    dragIds = null;
+    // Let go outside a folder: the files go back where they were.
+    if (reorder && !dropped) reorder.before.forEach((id) => reorder.grid.append(reorder.grid.querySelector(`.asset[data-id="${id}"]`)));
+    dragIds = null; reorder = null;
     root.querySelectorAll('.dragging, .drop-on').forEach((x) => x.classList.remove('dragging', 'drop-on'));
   });
   const groupAt = (e) => (dragIds ? e.target.closest?.('.file-group') : null);
+  // While reordering, the dragged files slide in before or after the file under the pointer.
+  function slide(e) {
+    const over = e.target.closest?.('.asset');
+    if (!over || over.classList.contains('dragging') || over.parentNode !== reorder.grid) return;
+    const r = over.getBoundingClientRect();
+    const after = e.clientY > r.bottom ? true : e.clientY < r.top ? false : e.clientX > r.left + r.width / 2;
+    const moving = [...reorder.grid.querySelectorAll('.asset.dragging')];
+    if (after) over.after(...moving); else over.before(...moving);
+  }
   root.addEventListener('dragover', (e) => {
     const g = groupAt(e);
     if (!g) return;
     e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+    if (reorder && g.contains(reorder.grid)) { root.querySelectorAll('.drop-on').forEach((x) => x.classList.remove('drop-on')); return slide(e); }
     root.querySelectorAll('.drop-on').forEach((x) => x !== g && x.classList.remove('drop-on'));
     g.classList.add('drop-on');
   });
@@ -121,18 +145,39 @@
     e.preventDefault();
     const ids = dragIds, folder = g.dataset.folder;
     g.classList.remove('drop-on');
+    if (reorder && g.contains(reorder.grid)) {
+      dropped = true;
+      const grid = reorder.grid, order = [...grid.querySelectorAll('.asset')].map((a) => a.dataset.id);
+      if (order.join() === reorder.before.join()) return;
+      syncNudges(grid);
+      try {
+        const r = await post(`${root.dataset.base}/assets/order`, [['folder', folder], ...order.map((id) => ['ids', id])]);
+        if (!r.ok) throw new Error(r.status);
+      } catch (err) { alert('The new order could not be saved. Check your connection and try again.'); location.reload(); }
+      return;
+    }
     // Dropped back where they already are: nothing to do.
     if (ids.every((id) => root.querySelector(`.asset[data-id="${id}"]`)?.closest('.file-group') === g)) return;
     try {
-      const r = await fetch(bar.action, {
-        method: 'POST', credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
-        body: new URLSearchParams([['folder', folder], ...ids.map((id) => ['ids', id])]),
-      });
+      const r = await post(bar.action, [['folder', folder], ...ids.map((id) => ['ids', id])]);
       const j = await r.json();
       location.href = j.redirect || location.pathname + '#files';
       if (j.redirect && j.redirect.split('#')[0] === location.pathname + location.search) location.reload();
     } catch (err) { alert('Those files could not be moved. Check your connection and try again.'); }
+  });
+  // After a drag, the first file can't move earlier and the last can't move later.
+  function syncNudges(grid) {
+    const cards = [...grid.querySelectorAll('.asset')];
+    cards.forEach((c, i) => {
+      const [up, down] = c.querySelectorAll('.nudge button');
+      if (up) up.disabled = i === 0;
+      if (down) down.disabled = i === cards.length - 1;
+    });
+  }
+
+  // Changing a folder's Sort menu saves it and shows the new order.
+  root.addEventListener('change', (e) => {
+    if (e.target.matches('select[data-autosubmit]')) e.target.form.requestSubmit();
   });
 
   // Folding folders shut. Each change is saved, so the page opens the same way next time.

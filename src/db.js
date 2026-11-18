@@ -95,6 +95,12 @@ db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_share ON folders(share_to
 if (!db.prepare('PRAGMA table_info(folders)').all().some((c) => c.name === 'position'))
   db.exec('ALTER TABLE folders ADD COLUMN position INTEGER');
 
+// How the files inside a folder are ordered, for the creator and the client: 'custom' (dragged by hand,
+// kept in assets.position), 'name', 'name_desc', 'newest', 'oldest', 'kind' or 'size'. NULL = the default
+// ('name' for a folder, 'custom' for loose files, which is upload order until they're dragged).
+if (!db.prepare('PRAGMA table_info(folders)').all().some((c) => c.name === 'sort'))
+  db.exec('ALTER TABLE folders ADD COLUMN sort TEXT');
+
 // Storage plan and Stripe subscription, per creator.
 const userCols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
 for (const [name, type] of [['plan', "TEXT NOT NULL DEFAULT 'free'"], ['plan_interval', 'TEXT'], ['plan_status', 'TEXT'],
