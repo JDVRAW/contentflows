@@ -472,6 +472,22 @@ function byFolder(assets, keep = [], order = [], sorts = {}) {
     .sort(([a], [b]) => rank(a) - rank(b))
     .map(([folder, items]) => { const sort = sortOf(sorts, folder); return { folder, label: folder.split('/').join(' / '), sort, items: sortFiles(items, sort) }; });
 }
+// Small line icons for the Files tools and folder menus.
+const ico = (d) => `<svg class="ui-ico" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const UI_ICON = {
+  collapse: ico('<path d="m7 9 5-5 5 5M7 15l5 5 5-5"/>'),
+  check: ico('<rect x="4" y="4" width="16" height="16" rx="4"/><path d="m8.5 12 2.5 2.5 4.5-5"/>'),
+  folderPlus: ico('<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2.2h8.4A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/><path d="M12 10.5v6M9 13.5h6"/>'),
+  move: ico('<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2.2h8.4A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/><path d="M9 13.5h6M12.5 11l2.5 2.5-2.5 2.5"/>'),
+  dots: ico('<circle cx="5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="19" cy="12" r="1.2" fill="currentColor"/>'),
+  pen: ico('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>'),
+  link: ico('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>'),
+  sort: ico('<path d="M7 5v14M4 16l3 3 3-3M17 19V5M14 8l3-3 3 3"/>'),
+  trash: ico('<path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13"/>'),
+  close: ico('<path d="M6 6l12 12M18 6 6 18"/>'),
+  up: ico('<path d="M12 19V5M6 11l6-6 6 6"/>'),
+  down: ico('<path d="M12 5v14M6 13l6 6 6-6"/>'),
+};
 // The creator's "Sort" menu for one folder ('' = loose files). Changing it saves right away.
 const sortMenu = (p, g) => `<form method="post" action="/projects/${p.id}/folders/sort" class="folder-sort">
   <input type="hidden" name="folder" value="${esc(g.folder)}">
@@ -547,46 +563,63 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
     <div class="files-head">
       <h2>Files <span class="muted">${assets.length}</span></h2>
       <div class="files-tools">
-        ${folders.length || assets.some((a) => a.folder) ? '<button class="btn ghost small" type="button" data-fold-all>Close all</button>' : ''}
-        ${assets.length ? '<button class="btn ghost small" type="button" data-select-all>Select all</button>' : ''}
-        <form method="post" action="/projects/${p.id}/folders" class="new-folder">
-          <input name="name" placeholder="New folder name" maxlength="100" required aria-label="New folder name">
-          <button class="btn ghost small">${FOLDER_ICON}Create folder</button>
-        </form>
+        ${folders.length || assets.some((a) => a.folder) ? `<button class="tool-btn" type="button" data-fold-all title="Close or open every folder">${UI_ICON.collapse}<span>Close all</span></button>` : ''}
+        ${assets.length ? `<button class="tool-btn" type="button" data-select-all title="Select every file">${UI_ICON.check}<span>Select all</span></button>` : ''}
+        <button class="tool-btn strong" type="button" data-new-folder aria-expanded="false" aria-controls="new-folder">${UI_ICON.folderPlus}<span>New folder</span></button>
       </div>
     </div>
+    <form method="post" action="/projects/${p.id}/folders" class="new-folder" id="new-folder" hidden>
+      <input name="name" placeholder="Folder name" maxlength="100" required aria-label="New folder name">
+      <button class="btn small">Create</button>
+      <button class="link small" type="button" data-new-folder-cancel>Cancel</button>
+    </form>
     ${notice ? `<p class="ok files-notice">${esc(notice)}</p>` : ''}
     ${(() => {
       const groups = byFolder(assets, folders, folderOrder, sorts);
       if (!groups.length) return '<p class="muted">No files uploaded yet.</p>';
       const anyFolder = groups.some((g) => g.folder);
-      // With folders around, "No folder" always shows so files can be dragged back out.
+      // With folders around, "No folder" is always in the page so files can be dragged back out.
+      // While it's empty it only shows during a drag.
       if (anyFolder && groups[0].folder) groups.unshift({ folder: '', label: '', sort: sortOf(sorts, ''), items: [] });
       // Without folders there's no folder bar, so the loose files' Sort menu sits with the tools above.
       const sortsUp = !anyFolder;
-      return (sortsUp && groups[0].items.length > 1 ? `<div class="files-sort">${sortMenu(p, groups[0])}</div>` : '') + groups.map((g) => { const shut = (g.folder || anyFolder) && collapsed.includes(g.folder); return `<div class="file-group${shut ? ' collapsed' : ''}" data-folder="${esc(g.folder)}">
-      ${g.folder || anyFolder ? `<div class="folder-head">
-        <button type="button" class="fold" aria-expanded="${shut ? 'false' : 'true'}" aria-label="${shut ? 'Open' : 'Close'} ${esc(g.label || 'No folder')}" title="Open or close this folder">${CHEVRON}</button>
-        ${g.items.length ? `<input type="checkbox" class="pick-group" aria-label="Select every file in ${esc(g.label || 'No folder')}">` : ''}
-        ${g.folder ? FOLDER_ICON : ''}<b class="fold-name">${esc(g.label || 'No folder')}</b> <span class="muted">${g.items.length}</span>
-        ${g.items.length > 1 ? sortMenu(p, g) : ''}
+      const firstFolder = groups.find((x) => x.folder), lastGroup = groups[groups.length - 1];
+      return (sortsUp && groups[0].items.length > 1 ? `<div class="files-sort">${sortMenu(p, groups[0])}</div>` : '') + groups.map((g) => {
+        const carded = g.folder || anyFolder;
+        const shut = carded && collapsed.includes(g.folder);
+        const name = esc(g.label || 'No folder');
+        const link = g.folder && folderLinks[g.folder];
+        const sortable = g.items.length > 1;
+        const hasMenu = g.folder || sortable;
+        return `<div class="file-group${carded ? ' fcard' : ''}${shut ? ' collapsed' : ''}${carded && !g.folder && !g.items.length ? ' loose-empty' : ''}" data-folder="${esc(g.folder)}">
+      ${carded ? `<div class="folder-head">
+        <button type="button" class="fold" aria-expanded="${shut ? 'false' : 'true'}" aria-label="${shut ? 'Open' : 'Close'} ${name}" title="Open or close this folder">${CHEVRON}</button>
+        ${g.items.length ? `<input type="checkbox" class="pick-group" aria-label="Select every file in ${name}">` : ''}
+        ${g.folder ? FOLDER_ICON : ''}<b class="fold-name">${name}</b> <span class="muted fold-count">${g.items.length}</span>
         ${g.folder ? `<form method="post" action="/projects/${p.id}/folders/rename" class="folder-rename" hidden>
           <input type="hidden" name="folder" value="${esc(g.folder)}">
           <input name="name" value="${esc(g.folder.split('/').pop())}" maxlength="100" required aria-label="New name for ${esc(g.label)}">
           <button class="btn small">Save</button><button class="link small" type="button" data-rename-cancel>Cancel</button>
         </form>` : ''}
-        ${g.folder ? `<div class="folder-actions">
-        <span class="folder-order">${['up', 'down'].map((d) => `<form method="post" action="/projects/${p.id}/folders/order"><input type="hidden" name="folder" value="${esc(g.folder)}"><input type="hidden" name="dir" value="${d}"><button class="order-btn" title="Move folder ${d}" aria-label="Move ${esc(g.label)} ${d}"${(d === 'up' ? g === groups.find((x) => x.folder) : g === groups[groups.length - 1]) ? ' disabled' : ''}>${d === 'up' ? '↑' : '↓'}</button></form>`).join('')}</span>
-        <button class="link small" type="button" data-rename>Rename</button>
-        ${folderLinks[g.folder] ? '' : `<form method="post" action="/projects/${p.id}/folders/link"><input type="hidden" name="folder" value="${esc(g.folder)}"><button class="link small" title="A link that opens only this folder">Share this folder</button></form>`}
-        <form method="post" action="/projects/${p.id}/folders/remove" class="folder-remove"${confirmAttr(g.items.length
-          ? `Remove the folder “${g.label}”? Its ${g.items.length} file${g.items.length === 1 ? '' : 's'} stay in the delivery and move up a level.`
-          : `Remove the empty folder “${g.label}”?`)}><input type="hidden" name="folder" value="${esc(g.folder)}"><button class="link small">Remove folder</button></form></div>` : ''}
-      </div>` : ''}
-      ${g.folder && folderLinks[g.folder] ? (() => { const id = `folder-link-${esc(folderLinks[g.folder])}`; return `<div class="folder-link">
+        ${hasMenu ? `<button type="button" class="menu-btn" data-folder-menu aria-haspopup="true" aria-expanded="false" aria-label="Options for ${name}" title="Folder options">${UI_ICON.dots}</button>
+        <div class="folder-menu" hidden>
+          <div class="menu-head">${g.folder ? FOLDER_ICON : ''}<b>${name}</b><span class="muted">${g.items.length} file${g.items.length === 1 ? '' : 's'}</span>
+            ${g.folder ? `<span class="folder-order">${['up', 'down'].map((d) => `<form method="post" action="/projects/${p.id}/folders/order"><input type="hidden" name="folder" value="${esc(g.folder)}"><input type="hidden" name="dir" value="${d}"><button class="order-btn" title="Move folder ${d}" aria-label="Move ${esc(g.label)} ${d}"${(d === 'up' ? g === firstFolder : g === lastGroup) ? ' disabled' : ''}>${UI_ICON[d]}</button></form>`).join('')}</span>` : ''}
+          </div>
+          ${g.folder ? `<button class="menu-item" type="button" data-rename>${UI_ICON.pen}<span>Rename</span></button>` : ''}
+          ${g.folder && !link ? `<form method="post" action="/projects/${p.id}/folders/link"><input type="hidden" name="folder" value="${esc(g.folder)}"><button class="menu-item">${UI_ICON.link}<span>Share this folder<small>A link that opens only this folder</small></span></button></form>` : ''}
+          ${sortable ? `<div class="menu-item menu-sort">${UI_ICON.sort}<span>Sort files</span>${sortMenu(p, g)}</div>` : ''}
+          ${g.folder ? `<div class="menu-sep"></div>
+          <form method="post" action="/projects/${p.id}/folders/remove"${confirmAttr(g.items.length
+            ? `Remove the folder “${g.label}”? Its ${g.items.length} file${g.items.length === 1 ? '' : 's'} stay in the delivery and move up a level.`
+            : `Remove the empty folder “${g.label}”?`)}><input type="hidden" name="folder" value="${esc(g.folder)}"><button class="menu-item danger">${UI_ICON.trash}<span>Remove folder<small>${g.items.length ? 'Its files stay in the delivery' : 'The folder is empty'}</small></span></button></form>` : ''}
+        </div>` : ''}
+      </div>
+      ${sortable || link ? `<div class="folder-meta">${sortable ? `<button type="button" class="chip" data-folder-menu title="Change how these files are sorted">${UI_ICON.sort}${SORTS[g.sort]}</button>` : ''}${link ? '<span class="chip on"><i></i>Folder link on</span>' : ''}</div>` : ''}` : ''}
+      ${link ? (() => { const id = `folder-link-${esc(link)}`; return `<div class="folder-link">
         <span class="small muted">Folder link · only shows this folder</span>
-        <div class="copy"><input readonly id="${id}" value="${esc(`${origin}/d/${folderLinks[g.folder]}`)}"><button class="btn small" type="button" data-copy="#${id}">Copy</button></div>
-        <a class="link small" href="/d/${esc(folderLinks[g.folder])}" target="_blank">Preview</a>
+        <div class="copy"><input readonly id="${id}" value="${esc(`${origin}/d/${link}`)}"><button class="btn small" type="button" data-copy="#${id}">Copy</button></div>
+        <a class="link small" href="/d/${esc(link)}" target="_blank">Preview</a>
         <form method="post" action="/projects/${p.id}/folders/link"${confirmAttr(`Turn off the link for “${g.label}”? Anyone who has it will no longer be able to open it.`)}><input type="hidden" name="folder" value="${esc(g.folder)}"><input type="hidden" name="on" value="0"><button class="link small danger">Turn off link</button></form>
       </div>`; })() : ''}
       ${g.items.length ? `<div class="asset-grid"${g.sort === 'custom' && g.items.length > 1 ? ' data-custom' : ''}>${g.items.map((a, i) => `
@@ -600,22 +633,24 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
           ${a.thumb_name || a.kind === 'video' ? `<form method="post" action="/projects/${p.id}/cover/${a.id}"><button class="link small">Set cover</button></form>` : ''}
           <form method="post" action="/projects/${p.id}/assets/${a.id}/delete" onsubmit="return confirm('Delete this file?')"><button class="link small danger">Delete</button></form>
         </div>
-      </div>`).join('')}</div>` : `<div class="folder-empty">${g.folder ? 'Empty folder. Drag files here, or select files and choose Move.' : 'Every file is in a folder. Drag files here to take them out.'}</div>`}
+      </div>`).join('')}</div>` : `<div class="folder-empty">${g.folder ? 'Empty folder. Drag files here, or select files and choose Move.' : 'Drop here to take files out of their folder.'}</div>`}
     </div>`; }).join('');
     })()}
+    <div class="menu-scrim" hidden></div>
     ${assets.length ? `<form method="post" action="/projects/${p.id}/assets/move" id="bulk" class="bulk-bar" hidden>
       <span class="bulk-count" data-count>0 selected</span>
-      <label class="bulk-move">Move to
-        <select name="folder">
+      <label class="bulk-move">${UI_ICON.move}
+        <select name="folder" aria-label="Move the selected files to">
+          <option value="__pick" disabled selected hidden>Move to…</option>
           <option value="">No folder</option>
           ${[...new Set([...byFolder(assets, folders, folderOrder, sorts).map((g) => g.folder).filter(Boolean)])].map((f) => `<option value="${esc(f)}">${esc(f.split('/').join(' / '))}</option>`).join('')}
           <option value="__new">New folder…</option>
         </select>
       </label>
       <input name="new_folder" placeholder="Folder name" maxlength="100" hidden aria-label="New folder name">
-      <button class="btn small">Move</button>
-      <button class="btn ghost small danger" formaction="/projects/${p.id}/assets/delete" data-delete>Delete</button>
-      <button class="link small" type="button" data-clear>Clear</button>
+      <button class="btn small" data-move-go hidden>Move</button>
+      <button class="bulk-icon danger" formaction="/projects/${p.id}/assets/delete" data-delete title="Delete the selected files" aria-label="Delete the selected files">${UI_ICON.trash}</button>
+      <button class="bulk-icon" type="button" data-clear title="Clear the selection" aria-label="Clear the selection">${UI_ICON.close}</button>
     </form>` : ''}
   </section>
 

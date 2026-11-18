@@ -1,22 +1,62 @@
 // Project page: pick several files, move them into folders (with the Move menu or by dragging
 // onto a folder) and delete only the picked ones.
-// Renaming a folder: the name turns into a small form in place.
+// Each folder's actions (rename, share, sort, reorder, remove) sit behind its ⋯ button: a small
+// menu on a computer, a sheet from the bottom on a phone. Renaming turns the name into a form in place.
 (() => {
   const root = document.getElementById('files');
   if (!root) return;
+  const scrim = root.querySelector('.menu-scrim');
+  let menu = null;
+  function closeMenu(focusBack) {
+    if (!menu) return;
+    const btn = menu.closest('.folder-head').querySelector('.menu-btn');
+    menu.hidden = true; btn.setAttribute('aria-expanded', 'false');
+    if (scrim) scrim.hidden = true;
+    document.documentElement.classList.remove('sheet-open');
+    menu = null;
+    if (focusBack) btn.focus();
+  }
+  function openMenu(g) {
+    closeMenu();
+    menu = g.querySelector('.folder-menu');
+    if (!menu) return;
+    menu.hidden = false;
+    g.querySelector('.menu-btn').setAttribute('aria-expanded', 'true');
+    if (scrim) scrim.hidden = false;
+    if (matchMedia('(max-width: 760px)').matches) document.documentElement.classList.add('sheet-open');
+    menu.querySelector('.menu-item, select')?.focus({ preventScroll: true });
+  }
   const show = (head, on) => {
     head.querySelector('.folder-rename').hidden = !on;
     head.querySelector('.fold-name').hidden = on;
-    head.querySelector('[data-rename]').hidden = on;
+    const more = head.querySelector('.menu-btn');
+    if (more) more.hidden = on;
     if (on) { const i = head.querySelector('.folder-rename input[name="name"]'); i.focus(); i.select(); }
   };
-  root.addEventListener('click', (e) => {
-    const open = e.target.closest('[data-rename]'), cancel = e.target.closest('[data-rename-cancel]');
-    if (open || cancel) show((open || cancel).closest('.folder-head'), !!open);
+  document.addEventListener('click', (e) => {
+    const toggle = e.target.closest('#files [data-folder-menu]');
+    if (toggle) {
+      const g = toggle.closest('.file-group'), mine = g.querySelector('.folder-menu');
+      return menu === mine ? closeMenu() : openMenu(g);
+    }
+    const open = e.target.closest('#files [data-rename]'), cancel = e.target.closest('#files [data-rename-cancel]');
+    if (open || cancel) { const head = (open || cancel).closest('.folder-head'); closeMenu(); return show(head, !!open); }
+    if (menu && !menu.contains(e.target)) closeMenu();
   });
   root.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && e.target.closest('.folder-rename')) { e.stopPropagation(); show(e.target.closest('.folder-head'), false); }
   });
+  addEventListener('keydown', (e) => { if (e.key === 'Escape' && menu) { e.stopPropagation(); closeMenu(true); } }, true);
+
+  // "New folder" opens the name field under the heading.
+  const nf = document.getElementById('new-folder'), nfBtn = root.querySelector('[data-new-folder]');
+  const showNew = (on) => {
+    nf.hidden = !on; nfBtn.setAttribute('aria-expanded', String(on));
+    if (on) nf.querySelector('input[name="name"]').focus(); else nf.reset();
+  };
+  nfBtn?.addEventListener('click', () => showNew(nf.hidden));
+  nf?.querySelector('[data-new-folder-cancel]').addEventListener('click', () => { showNew(false); nfBtn.focus(); });
+  nf?.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); showNew(false); nfBtn.focus(); } });
 })();
 
 (() => {
@@ -41,7 +81,7 @@
     root.classList.toggle('picking', n > 0);
     bar.hidden = n === 0;
     count.textContent = `${n} selected`;
-    if (allBtn) allBtn.textContent = n && n === boxes().length ? 'Select none' : 'Select all';
+    if (allBtn) allBtn.querySelector('span').textContent = n && n === boxes().length ? 'Select none' : 'Select all';
   }
 
   // Shift-click picks every file between the last one clicked and this one.
@@ -71,15 +111,23 @@
     const on = !(picked().length === boxes().length);
     boxes().forEach((b) => (b.checked = on)); sync();
   });
-  bar.querySelector('[data-clear]').addEventListener('click', () => { boxes().forEach((b) => (b.checked = false)); sync(); });
+  function clearAll() {
+    boxes().forEach((b) => (b.checked = false));
+    select.value = '__pick'; newName.hidden = true; newName.required = false; bar.querySelector('[data-move-go]').hidden = true;
+    sync();
+  }
+  bar.querySelector('[data-clear]').addEventListener('click', clearAll);
   addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && picked().length && !e.target.closest('input, select, textarea')) { boxes().forEach((b) => (b.checked = false)); sync(); }
+    if (e.key === 'Escape' && picked().length && !e.target.closest('input, select, textarea')) clearAll();
   });
 
+  // Picking a folder in "Move to…" moves the files straight away; "New folder…" first asks for a name.
+  const go = bar.querySelector('[data-move-go]');
   select.addEventListener('change', () => {
     const isNew = select.value === '__new';
-    newName.hidden = !isNew; newName.required = isNew;
+    newName.hidden = !isNew; newName.required = isNew; go.hidden = !isNew;
     if (isNew) newName.focus();
+    else if (select.value !== '__pick') bar.requestSubmit(go);
   });
   bar.addEventListener('submit', (e) => {
     if (e.submitter?.hasAttribute('data-delete')) {
@@ -110,11 +158,15 @@
     dropped = false;
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/x-contentflows-files', dragIds.join(','));
+    // An empty "No folder" only shows while dragging, so files can be dropped back out of a folder.
+    // (Changing the page during dragstart itself can cancel the drag, hence the short wait.)
+    if (!reorder) setTimeout(() => dragIds && root.classList.add('dragging-files'));
   });
   root.addEventListener('dragend', () => {
     // Let go outside a folder: the files go back where they were.
     if (reorder && !dropped) reorder.before.forEach((id) => reorder.grid.append(reorder.grid.querySelector(`.asset[data-id="${id}"]`)));
     dragIds = null; reorder = null;
+    root.classList.remove('dragging-files');
     root.querySelectorAll('.dragging, .drop-on').forEach((x) => x.classList.remove('dragging', 'drop-on'));
   });
   const groupAt = (e) => (dragIds ? e.target.closest?.('.file-group') : null);
@@ -183,7 +235,7 @@
   // Folding folders shut. Each change is saved, so the page opens the same way next time.
   const foldBtn = root.querySelector('[data-fold-all]');
   const groups = () => [...root.querySelectorAll('.file-group')].filter((g) => g.querySelector('.fold'));
-  const syncFoldAll = () => { if (foldBtn) foldBtn.textContent = groups().every((g) => g.classList.contains('collapsed')) ? 'Open all' : 'Close all'; };
+  const syncFoldAll = () => { if (foldBtn) foldBtn.querySelector('span').textContent = groups().every((g) => g.classList.contains('collapsed')) ? 'Open all' : 'Close all'; };
   function fold(g, shut) {
     if (g.classList.contains('collapsed') === shut) return;
     g.classList.toggle('collapsed', shut);
