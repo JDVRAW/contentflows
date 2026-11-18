@@ -622,8 +622,8 @@ html.am-lock, html.am-lock body { overflow: hidden; }
 .dl-folder em { font: 400 11px var(--mono); font-style: normal; opacity: .55; }
 .dl-folder-dl { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 999px; background: #ece7d3; color: #111113; font: 500 13px var(--geist); text-decoration: none; }
 .dl-folder-dl:hover { background: #e2dcc4; }
-.dl-tile.wide { aspect-ratio: auto; }
-.dl-tile.wide-full { aspect-ratio: 21 / 9; }
+.dl-grid.is-masonry { display: block; position: relative; }
+.dl-grid.is-masonry .dl-tile { position: absolute; aspect-ratio: auto; }
 .dl-tile img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .8s cubic-bezier(.215,.61,.355,1), filter .3s; }
 .dl-tile:hover img { transform: scale(1.04); }
 .dl-tile.video img { filter: brightness(.72); }
@@ -720,7 +720,6 @@ html.am-lock, html.am-lock body { overflow: hidden; }
   .dl-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .dl-tile { border-radius: 10px; }
   .dl-tile.is-picked { box-shadow: 0 0 0 2px #dcd6bd, 0 0 0 4px #E5402A; }
-  .dl-tile.wide-full { aspect-ratio: 16 / 10; }
   .dl-tile figcaption { display: none; }
   .dl-check { width: 24px; height: 24px; }
   .dl-check::after { left: 8px; top: 5px; }

@@ -60,4 +60,35 @@ function runThumb(srcPath, kind, id) {
   });
 }
 
-module.exports = { kindOf, makeThumb };
+// Width / height of a thumbnail, read from its JPEG header, so the client gallery can lay each photo
+// or film out at its real shape (a vertical shot stays vertical instead of being cropped to a wide tile).
+// Thumbnails never change once made, so the answer is remembered per file.
+const ratios = new Map();
+function thumbRatio(thumbName) {
+  if (!thumbName) return null;
+  if (ratios.has(thumbName)) return ratios.get(thumbName);
+  let r = null;
+  try {
+    const fd = fs.openSync(path.join(DATA_DIR, 'thumbs', thumbName), 'r');
+    const buf = Buffer.alloc(65536);
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    let i = 2;
+    while (i + 9 < n && buf[0] === 0xff && buf[1] === 0xd8) {
+      if (buf[i] !== 0xff) { i++; continue; }
+      const m = buf[i + 1];
+      // SOF0..SOF15 (not DHT C4, JPG C8 or DAC CC) carry the frame size.
+      if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) {
+        const h = buf.readUInt16BE(i + 5), w = buf.readUInt16BE(i + 7);
+        if (w && h) r = Math.round((w / h) * 1000) / 1000;
+        break;
+      }
+      if (m === 0xd8 || m === 0x01 || (m >= 0xd0 && m <= 0xd7)) { i += 2; continue; }
+      i += 2 + buf.readUInt16BE(i + 2);
+    }
+  } catch (e) { return null; } // not made yet or missing: don't remember, it may appear later
+  ratios.set(thumbName, r);
+  return r;
+}
+
+module.exports = { kindOf, makeThumb, thumbRatio };
