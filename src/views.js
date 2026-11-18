@@ -385,6 +385,14 @@ function storageMeter({ used, plan }, { compact = false } = {}) {
   </div>`;
 }
 
+// The opt-in switch for auto-delete and its countdown length, on the New delivery form and in Settings.
+function autoDeleteField(p) {
+  return `<div class="auto-delete-field">
+    <label class="check"><input type="checkbox" name="auto_delete" ${p.auto_delete ? 'checked' : ''}> Delete this delivery and its files after the client downloads</label>
+    <label class="days">Countdown <input type="number" name="auto_delete_days" min="1" max="${retention.MAX_DAYS}" step="1" value="${retention.daysOf(p)}" aria-label="Days after the first download"> days after the client's first download${p.auto_delete && p.delete_at ? ` <span class="muted">(deletes ${fmtDate(p.delete_at)})</span>` : ''}</label>
+  </div>`;
+}
+
 function dashboard({ user, projects, usage }) {
   return layout({ title: 'Deliveries', user, current: '/dashboard', body: `
 <main class="wrap">
@@ -407,6 +415,7 @@ function dashboard({ user, projects, usage }) {
   <label>Title<input name="title" required placeholder="Summer campaign — finals"></label>
   <label>Type<select name="type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>
   <div class="row"><label>Client name<input name="client_name"></label><label>Client email<input type="email" name="client_email"></label></div>
+  ${autoDeleteField({ auto_delete: 0 })}
   <div class="row form-end"><button type="button" class="btn ghost" onclick="this.closest('dialog').close(); history.replaceState(null, '', location.pathname)">Cancel</button><button class="btn">Create</button></div>
 </form></dialog>
 <script>(() => { const d = document.getElementById('new');
@@ -472,7 +481,7 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
   <a class="btn ghost" href="/d/${p.share_token}" target="_blank">Preview as client</a></div>
 
   <section class="share" id="share">
-    <div><h3>Delivery link</h3><p class="muted small">${p.password_hash ? 'Password protected' : 'Anyone with the link can view'}${p.expires_at ? ` · expires ${fmtDate(p.expires_at)}` : ''}${p.allow_download ? '' : ' · downloads off'}${p.auto_delete && !p.delete_at ? ` · deletes ${retention.daysText} after the client's first download` : ''}</p></div>
+    <div><h3>Delivery link</h3><p class="muted small">${p.password_hash ? 'Password protected' : 'Anyone with the link can view'}${p.expires_at ? ` · expires ${fmtDate(p.expires_at)}` : ''}${p.allow_download ? '' : ' · downloads off'}${p.auto_delete && !p.delete_at ? ` · deletes ${retention.daysText(retention.daysOf(p))} after the client's first download` : ''}</p></div>
     ${p.auto_delete && p.delete_at ? `<div class="auto-delete">
       <p><b>Deletes ${fmtDate(p.delete_at)}.</b> Your client downloaded this delivery, so it and all its files will be removed for good on ${fmtDate(p.delete_at)}.</p>
       <form method="post" action="/projects/${p.id}/keep"><button class="btn ghost small">Keep this delivery</button></form>
@@ -581,7 +590,7 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
       <div class="row"><label>Password <span class="muted">${p.password_hash ? '(set, leave blank to keep)' : '(optional)'}</span><input type="password" name="password" autocomplete="new-password"></label>
       <label>Expires on <span class="muted">(optional)</span><input type="date" name="expires_at" value="${esc(p.expires_at || '')}"></label></div>
       <label class="check"><input type="checkbox" name="allow_download" ${p.allow_download ? 'checked' : ''}> Allow client downloads</label>
-      <label class="check"><input type="checkbox" name="auto_delete" ${p.auto_delete ? 'checked' : ''}> Delete this delivery and its files ${retention.daysText} after the client's first download${p.auto_delete && p.delete_at ? ` <span class="muted">(on ${fmtDate(p.delete_at)})</span>` : ''}</label>
+      ${autoDeleteField(p)}
       ${p.password_hash ? '<label class="check"><input type="checkbox" name="remove_password"> Remove password</label>' : ''}
       <div class="row form-end"><button class="btn">Save settings</button></div>
     </form>
@@ -871,11 +880,12 @@ function deliveryPage({ project: p, assets, studio, brand, host = '', folderOrde
   // first, or (before any download) that the countdown starts with the first download.
   const until = retention.lastDay(p);
   const waiting = !!p.auto_delete && !p.delete_at && !!p.allow_download;
-  const availFact = until ? `Until ${fmtDate(until.at)}` : waiting ? `${retention.daysText} after download` : 'No expiry';
+  const keepFor = retention.daysText(retention.daysOf(p));
+  const availFact = until ? `Until ${fmtDate(until.at)}` : waiting ? `${keepFor} after download` : 'No expiry';
   const endNote = until && until.deleting
     ? `These files will be removed on ${fmtDate(until.at)}. Save what you need before then.`
-    : until ? `Available until ${fmtDate(until.at)}. Save what you need before then.${waiting ? ` Files are removed ${retention.daysText} after your first download.` : ''}`
-    : waiting ? `Files are removed ${retention.daysText} after your first download, so save everything you need.`
+    : until ? `Available until ${fmtDate(until.at)}. Save what you need before then.${waiting ? ` Files are removed ${keepFor} after your first download.` : ''}`
+    : waiting ? `Files are removed ${keepFor} after your first download, so save everything you need.`
     : 'This link stays live until your creator turns it off.';
   const items = visual.map((a) => ({ id: a.id, kind: a.kind, name: a.original_name, size: a.size, src: `${base}/media/${a.id}`, poster: a.thumb_name ? `${base}/thumb/${a.id}` : null, dl: p.allow_download ? `${base}/download/${a.id}` : null }));
   const ext = (n) => esc((n.split('.').pop() || 'file').slice(0, 4).toUpperCase());

@@ -127,10 +127,17 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
 const projectCols = new Set(db.prepare('PRAGMA table_info(projects)').all().map((c) => c.name));
 for (const name of ['emailed_to', 'emailed_at']) if (!projectCols.has(name)) db.exec(`ALTER TABLE projects ADD COLUMN ${name} TEXT`);
 
-// Auto-delete: auto_delete = 1 means the delivery deletes itself some days after the client's first
-// download (see src/retention.js); delete_at is when, set on that first download (NULL = not started).
-if (!projectCols.has('auto_delete')) db.exec('ALTER TABLE projects ADD COLUMN auto_delete INTEGER NOT NULL DEFAULT 1');
+// Auto-delete (opt-in): auto_delete = 1 means the delivery deletes itself auto_delete_days after the client's
+// first download (see src/retention.js); delete_at is when, set on that first download (NULL = not started).
+// New deliveries are always inserted with auto_delete set explicitly (0 unless the creator turns it on).
+if (!projectCols.has('auto_delete')) db.exec('ALTER TABLE projects ADD COLUMN auto_delete INTEGER NOT NULL DEFAULT 0');
 if (!projectCols.has('delete_at')) db.exec('ALTER TABLE projects ADD COLUMN delete_at TEXT');
+if (!projectCols.has('auto_delete_days')) {
+  db.exec('ALTER TABLE projects ADD COLUMN auto_delete_days INTEGER');
+  // Auto-delete briefly shipped switched on for every delivery. Now that it's opt-in, turn it off
+  // everywhere (running countdowns included) so nothing is deleted that the creator didn't choose.
+  db.exec('UPDATE projects SET auto_delete = 0, delete_at = NULL');
+}
 db.exec('CREATE INDEX IF NOT EXISTS idx_projects_delete_at ON projects(delete_at)');
 
 module.exports = { db, DATA_DIR };

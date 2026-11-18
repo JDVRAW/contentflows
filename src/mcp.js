@@ -61,7 +61,7 @@ function mcpRouter(ctx) {
     const server = new McpServer({ name: 'contentflows', version: '1.0.0' }, {
       instructions: 'ContentFlows delivers final photoshoots, films and commercials to clients through one private link. '
         + 'A "delivery" is one project for one client: its files, a share link, and settings (password, expiry, downloads). '
-        + `Unless auto-delete is turned off, a delivery and its files are deleted ${retention.daysText} after the client first downloads anything (deletes_on). `
+        + 'Auto-delete is off unless turned on: then the delivery and its files are deleted auto_delete_days after the client first downloads anything (deletes_on). '
         + 'Typical flow: create_delivery, add_file_from_url for each file, then give the user the share link from the result. '
         + 'Always show the share link exactly as returned. Before remove_file, new_share_link or delete_delivery, confirm with the user.',
     });
@@ -82,7 +82,7 @@ function mcpRouter(ctx) {
         id: p.id, title: p.title, type: p.type, client_name: p.client_name, client_email: p.client_email,
         share_link: link(p), password_protected: !!p.password_hash, downloads_allowed: !!p.allow_download,
         expires_on: p.expires_at,
-        auto_delete: !!p.auto_delete, deletes_on: p.auto_delete && p.delete_at ? `${p.delete_at.replace(' ', 'T')}Z` : null,
+        auto_delete: !!p.auto_delete, auto_delete_days: retention.daysOf(p), deletes_on: p.auto_delete && p.delete_at ? `${p.delete_at.replace(' ', 'T')}Z` : null,
         files: n.files, total_size: fmtSize(n.bytes), views: n.views, downloads: n.downloads,
         created_at: p.created_at,
       };
@@ -130,14 +130,15 @@ function mcpRouter(ctx) {
         password: z.string().min(1).max(200).optional().describe('If set, the client needs it to open the link'),
         expires_on: dateText.optional().describe('Last day the link works (YYYY-MM-DD)'),
         allow_downloads: z.boolean().optional().describe('Default true'),
-        auto_delete: z.boolean().optional().describe(`Delete the delivery and its files ${retention.daysText} after the client's first download. Default true`),
+        auto_delete: z.boolean().optional().describe('Delete the delivery and its files auto_delete_days after the client\'s first download. Default false'),
+        auto_delete_days: z.number().int().min(1).max(retention.MAX_DAYS).optional().describe(`Days from the client's first download to deletion. Default ${retention.DEFAULT_DAYS}`),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     }, async (a) => {
-      const r = db.prepare(`INSERT INTO projects (user_id, title, type, client_name, client_email, message, share_token, password_hash, allow_download, expires_at, auto_delete)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, a.title.trim(), a.type || 'project', a.client_name?.trim() || null,
+      const r = db.prepare(`INSERT INTO projects (user_id, title, type, client_name, client_email, message, share_token, password_hash, allow_download, expires_at, auto_delete, auto_delete_days)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, a.title.trim(), a.type || 'project', a.client_name?.trim() || null,
         a.client_email?.trim() || null, a.message?.trim() || null, token(16), a.password ? bcrypt.hashSync(a.password, 10) : null,
-        a.allow_downloads === false ? 0 : 1, a.expires_on || null, a.auto_delete === false ? 0 : 1);
+        a.allow_downloads === false ? 0 : 1, a.expires_on || null, a.auto_delete ? 1 : 0, retention.cleanDays(a.auto_delete_days));
       return ok(summary(own(r.lastInsertRowid)));
     });
 
@@ -155,7 +156,8 @@ function mcpRouter(ctx) {
         remove_password: z.boolean().optional(),
         expires_on: dateText.or(z.literal('')).optional().describe('YYYY-MM-DD, or "" for no expiry'),
         allow_downloads: z.boolean().optional(),
-        auto_delete: z.boolean().optional().describe(`false keeps the delivery (stops a running countdown); true deletes it ${retention.daysText} after the client's next first download`),
+        auto_delete: z.boolean().optional().describe('true turns auto-delete on (the countdown starts at the client\'s next download); false keeps the delivery and stops a running countdown'),
+        auto_delete_days: z.number().int().min(1).max(retention.MAX_DAYS).optional().describe('Days from the client\'s first download to deletion; moves a running countdown'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     }, async (a) => {
@@ -166,11 +168,16 @@ function mcpRouter(ctx) {
       if (a.remove_password) pw = null;
       if (a.password) pw = bcrypt.hashSync(a.password, 10);
       db.prepare(`UPDATE projects SET title = ?, type = ?, client_name = ?, client_email = ?, message = ?,
-        password_hash = ?, allow_download = ?, expires_at = ?, auto_delete = ?, delete_at = ? WHERE id = ?`).run(
+        password_hash = ?, allow_download = ?, expires_at = ?, auto_delete = ?, auto_delete_days = ?, delete_at = ? WHERE id = ?`).run(
         a.title?.trim() || p.title, a.type || p.type, pick(a.client_name, p.client_name), pick(a.client_email, p.client_email),
         pick(a.message, p.message), pw, a.allow_downloads === undefined ? p.allow_download : a.allow_downloads ? 1 : 0,
         a.expires_on === undefined ? p.expires_at : a.expires_on || null,
-        a.auto_delete === undefined ? p.auto_delete : a.auto_delete ? 1 : 0, a.auto_delete === false ? null : p.delete_at, p.id);
+        ...(() => {
+          const on = a.auto_delete === undefined ? !!p.auto_delete : a.auto_delete;
+          const days = a.auto_delete_days === undefined ? retention.daysOf(p) : retention.cleanDays(a.auto_delete_days);
+          const at = on && p.auto_delete && p.delete_at ? retention.shiftDeleteAt(p.delete_at, retention.daysOf(p), days) : null;
+          return [on ? 1 : 0, days, at];
+        })(), p.id);
       return ok(summary(own(p.id)));
     });
 

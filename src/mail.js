@@ -67,7 +67,7 @@ function deliveryEmail({ project: p, brand, link, origin, fileCount, totalSize, 
       if (until) return `${until.deleting ? 'Files are removed on' : 'Available until'} ${fmtDate(until.at)}`;
       return null;
     })(),
-    p.auto_delete && !p.delete_at && p.allow_download ? `Files are removed ${retention.daysText} after your first download` : null,
+    p.auto_delete && !p.delete_at && p.allow_download ? `Files are removed ${retention.daysText(retention.daysOf(p))} after your first download` : null,
     p.password_hash ? `Password protected. ${studio} will send you the password.` : null,
   ].filter(Boolean);
   const subject = `${studio} sent you ${p.title}`;

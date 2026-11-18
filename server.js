@@ -241,11 +241,11 @@ app.get('/dashboard', requireUser, (req, res) => {
 
 const TYPES = Object.keys(V.TYPES);
 app.post('/projects', requireUser, (req, res) => {
-  const { title = '', type, client_name, client_email } = req.body;
+  const { title = '', type, client_name, client_email, auto_delete, auto_delete_days } = req.body;
   if (!title.trim()) return res.redirect('/dashboard');
-  const r = db.prepare(`INSERT INTO projects (user_id, title, type, client_name, client_email, share_token)
-    VALUES (?, ?, ?, ?, ?, ?)`).run(req.user.id, title.trim(), TYPES.includes(type) ? type : 'project',
-    client_name?.trim() || null, client_email?.trim() || null, token(16));
+  const r = db.prepare(`INSERT INTO projects (user_id, title, type, client_name, client_email, share_token, auto_delete, auto_delete_days)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(req.user.id, title.trim(), TYPES.includes(type) ? type : 'project',
+    client_name?.trim() || null, client_email?.trim() || null, token(16), auto_delete ? 1 : 0, retention.cleanDays(auto_delete_days));
   res.redirect(`/projects/${r.lastInsertRowid}`);
 });
 
@@ -280,18 +280,21 @@ app.post('/projects/:id/settings', requireUser, ownProject, (req, res) => {
   let pw = req.project.password_hash;
   if (b.remove_password) pw = null;
   else if (b.password) pw = bcrypt.hashSync(b.password, 10);
+  // Turning auto-delete off stops a countdown that already started; turning it back on waits for the next
+  // download. A new length moves a running countdown, which still counts from the first download.
+  const days = retention.cleanDays(b.auto_delete_days);
+  const p0 = req.project;
+  const deleteAt = !b.auto_delete || !p0.auto_delete || !p0.delete_at ? null : retention.shiftDeleteAt(p0.delete_at, retention.daysOf(p0), days);
   db.prepare(`UPDATE projects SET title = ?, type = ?, client_name = ?, client_email = ?, message = ?,
-    password_hash = ?, allow_download = ?, expires_at = ?, auto_delete = ?,
-    delete_at = CASE WHEN ? THEN delete_at END WHERE id = ?`).run(
+    password_hash = ?, allow_download = ?, expires_at = ?, auto_delete = ?, auto_delete_days = ?, delete_at = ? WHERE id = ?`).run(
     (b.title || '').trim() || req.project.title, TYPES.includes(b.type) ? b.type : req.project.type,
     b.client_name?.trim() || null, b.client_email?.trim() || null, b.message?.trim() || null,
     pw, b.allow_download ? 1 : 0, /^\d{4}-\d{2}-\d{2}$/.test(b.expires_at || '') ? b.expires_at : null,
-    // Turning auto-delete off stops a countdown that already started; turning it back on waits for the next download.
-    b.auto_delete ? 1 : 0, b.auto_delete ? 1 : 0, req.project.id);
+    b.auto_delete ? 1 : 0, days, deleteAt, req.project.id);
   res.redirect(`/projects/${req.project.id}?saved=1`);
 });
 
-// "Keep this delivery": stops the countdown and turns auto-delete off for this delivery.
+// "Keep this delivery": stops the countdown and turns auto-delete off for this delivery (it can be turned back on in Settings).
 app.post('/projects/:id/keep', requireUser, ownProject, (req, res) => {
   db.prepare('UPDATE projects SET auto_delete = 0, delete_at = NULL WHERE id = ?').run(req.project.id);
   res.redirect(`/projects/${req.project.id}?saved=1`);
@@ -892,7 +895,7 @@ const track = (req, type, assetId = null) => {
   db.prepare('INSERT INTO events (project_id, asset_id, type) VALUES (?, ?, ?)').run(req.project.id, assetId, type);
   // The client's first download starts the auto-delete countdown.
   if ((type === 'download' || type === 'zip') && req.project.auto_delete && !req.project.delete_at)
-    db.prepare('UPDATE projects SET delete_at = ? WHERE id = ? AND auto_delete = 1 AND delete_at IS NULL').run(retention.deleteAtFrom(), req.project.id);
+    db.prepare('UPDATE projects SET delete_at = ? WHERE id = ? AND auto_delete = 1 AND delete_at IS NULL').run(retention.deleteAtFrom(retention.daysOf(req.project)), req.project.id);
 };
 const inScope = (req, a) => !req.scope || a.folder === req.scope || (a.folder || '').startsWith(req.scope + '/');
 const getAsset = (req) => {
