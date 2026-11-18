@@ -15,6 +15,7 @@ const { PLANS, PAID, INTERVALS, planOf, canBrand, brandOf } = require('./src/pla
 const V = require('./src/views');
 const { mcpRouter, newKey, hashKey } = require('./src/mcp');
 const mail = require('./src/mail');
+const retention = require('./src/retention');
 
 const PORT = process.env.PORT || 3000;
 // Cookie signing key: SESSION_SECRET if set, otherwise one generated on first start and kept with the data.
@@ -280,10 +281,19 @@ app.post('/projects/:id/settings', requireUser, ownProject, (req, res) => {
   if (b.remove_password) pw = null;
   else if (b.password) pw = bcrypt.hashSync(b.password, 10);
   db.prepare(`UPDATE projects SET title = ?, type = ?, client_name = ?, client_email = ?, message = ?,
-    password_hash = ?, allow_download = ?, expires_at = ? WHERE id = ?`).run(
+    password_hash = ?, allow_download = ?, expires_at = ?, auto_delete = ?,
+    delete_at = CASE WHEN ? THEN delete_at END WHERE id = ?`).run(
     (b.title || '').trim() || req.project.title, TYPES.includes(b.type) ? b.type : req.project.type,
     b.client_name?.trim() || null, b.client_email?.trim() || null, b.message?.trim() || null,
-    pw, b.allow_download ? 1 : 0, /^\d{4}-\d{2}-\d{2}$/.test(b.expires_at || '') ? b.expires_at : null, req.project.id);
+    pw, b.allow_download ? 1 : 0, /^\d{4}-\d{2}-\d{2}$/.test(b.expires_at || '') ? b.expires_at : null,
+    // Turning auto-delete off stops a countdown that already started; turning it back on waits for the next download.
+    b.auto_delete ? 1 : 0, b.auto_delete ? 1 : 0, req.project.id);
+  res.redirect(`/projects/${req.project.id}?saved=1`);
+});
+
+// "Keep this delivery": stops the countdown and turns auto-delete off for this delivery.
+app.post('/projects/:id/keep', requireUser, ownProject, (req, res) => {
+  db.prepare('UPDATE projects SET auto_delete = 0, delete_at = NULL WHERE id = ?').run(req.project.id);
   res.redirect(`/projects/${req.project.id}?saved=1`);
 });
 
@@ -485,11 +495,32 @@ app.post('/projects/:id/assets/delete', requireUser, ownProject, (req, res) => {
   back(req, res, `Deleted ${plural(picked.length, 'file')}.`);
 });
 
+function deleteDelivery(id) {
+  const files = db.prepare('SELECT * FROM assets WHERE project_id = ?').all(id);
+  // The row goes first (files, folders and events cascade), then the stored bytes.
+  db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+  files.forEach(removeAssetFiles);
+  return files;
+}
+
 app.post('/projects/:id/delete', requireUser, ownProject, (req, res) => {
-  db.prepare('SELECT * FROM assets WHERE project_id = ?').all(req.project.id).forEach(removeAssetFiles);
-  db.prepare('DELETE FROM projects WHERE id = ?').run(req.project.id);
+  deleteDelivery(req.project.id);
   res.redirect('/dashboard');
 });
+
+// Deliveries whose auto-delete date has passed go for good, files included. Runs on start and hourly;
+// until then their links already refuse clients (see loadDelivery).
+function deleteDueDeliveries() {
+  const due = db.prepare('SELECT id, title FROM projects WHERE auto_delete = 1 AND delete_at IS NOT NULL AND delete_at <= ?')
+    .all(retention.sqlTime(Date.now()));
+  for (const p of due) {
+    try {
+      const files = deleteDelivery(p.id);
+      console.log(`[auto-delete] removed delivery ${p.id} (${files.length} file${files.length === 1 ? '' : 's'}, ${(files.reduce((n, a) => n + a.size, 0) / 1024 ** 3).toFixed(2)} GB)`);
+    } catch (e) { console.error('[auto-delete]', p.id, e.message); }
+  }
+  return due.length;
+}
 
 // ---------- creator: uploads ----------
 const upload = multer({
@@ -822,7 +853,7 @@ app.get('/brand/:file', (req, res) => {
 });
 
 app.use('/mcp', mcpRouter({
-  db, token, TYPES: V.TYPES, storage, kindOf, makeThumb, insertAsset, removeAssetFiles, spaceProblem, spaceLeft, reserved,
+  db, token, TYPES: V.TYPES, storage, deleteDelivery, kindOf, makeThumb, insertAsset, removeAssetFiles, spaceProblem, spaceLeft, reserved,
   usage, originOf, MAX_UPLOAD, UPLOADS, fmtSize: V.fmtSize, userView: billing.view,
 }));
 
@@ -844,10 +875,12 @@ function loadDelivery(req, res, next) {
       p = { ...whole, share_token: req.params.token, title: `${whole.title} · ${f.path.split('/').pop()}` };
     }
   }
-  if (!p) return res.status(404).send(V.messagePage('Link not found', 'This delivery link is invalid or has been replaced.'));
+  if (!p) return res.status(404).send(V.messagePage('Link not found', 'This delivery link is invalid, has been replaced, or the delivery was removed.'));
   const isOwner = req.user && req.user.id === p.user_id;
   if (!isOwner && p.expires_at && new Date(`${p.expires_at}T23:59:59Z`) < new Date())
     return res.status(410).send(V.messagePage('Delivery expired', 'This delivery is no longer available. Contact your creator for a new link.'));
+  if (!isOwner && retention.isDue(p))
+    return res.status(410).send(V.messagePage('Delivery removed', 'These files were removed after they were downloaded. Contact your creator if you need them again.'));
   req.project = p;
   req.isOwner = isOwner;
   req.unlocked = isOwner || !p.password_hash || req.signedCookies[`cf_unlock_${p.id}`] === unlockValue(p);
@@ -855,7 +888,11 @@ function loadDelivery(req, res, next) {
 }
 const requireUnlocked = (req, res, next) => (req.unlocked ? next() : res.status(401).send('Locked'));
 const track = (req, type, assetId = null) => {
-  if (!req.isOwner) db.prepare('INSERT INTO events (project_id, asset_id, type) VALUES (?, ?, ?)').run(req.project.id, assetId, type);
+  if (req.isOwner) return;
+  db.prepare('INSERT INTO events (project_id, asset_id, type) VALUES (?, ?, ?)').run(req.project.id, assetId, type);
+  // The client's first download starts the auto-delete countdown.
+  if ((type === 'download' || type === 'zip') && req.project.auto_delete && !req.project.delete_at)
+    db.prepare('UPDATE projects SET delete_at = ? WHERE id = ? AND auto_delete = 1 AND delete_at IS NULL').run(retention.deleteAtFrom(), req.project.id);
 };
 const inScope = (req, a) => !req.scope || a.folder === req.scope || (a.folder || '').startsWith(req.scope + '/');
 const getAsset = (req) => {
@@ -1035,6 +1072,8 @@ if (require.main === module) {
     if (rss > Number(process.env.MEMORY_WARN_MB || 700) && Date.now() - warned > 5 * 60e3) { warned = Date.now(); console.warn('[memory] high:', mb()); }
   }, 15e3).unref();
   try { sweepUnfinishedUploads(); } catch (e) { console.error('cleanup failed', e); }
+  try { deleteDueDeliveries(); } catch (e) { console.error('[auto-delete] failed', e); }
+  setInterval(() => { try { deleteDueDeliveries(); } catch (e) { console.error('[auto-delete] failed', e); } }, 3600e3).unref();
   console.log(`Files are stored in ${storage.enabled ? `object storage, ${storage.describe}` : storage.describe}`);
   const server = app.listen(PORT, () => {
     console.log(`ContentFlows running on http://localhost:${PORT}`);
@@ -1045,3 +1084,4 @@ if (require.main === module) {
   server.requestTimeout = 2 * 3600 * 1000;
 }
 module.exports = app;
+app.deleteDueDeliveries = deleteDueDeliveries;

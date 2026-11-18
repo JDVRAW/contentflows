@@ -106,6 +106,10 @@ dialog::backdrop { background: rgba(0,0,0,.6); backdrop-filter: blur(4px); }
 .asset-actions { display: flex; gap: 14px; padding: 0 12px 10px; }
 .settings > form { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; }
 .danger-zone { display: flex; gap: 10px; margin-top: 16px; }
+.auto-delete { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; padding: 12px 14px; border-radius: 10px; background: color-mix(in srgb, var(--danger) 8%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent); }
+.auto-delete p { margin: 0; font-size: 14px; }
+.auto-delete b { color: var(--danger); }
+.card .deleting { margin: 4px 0 0; color: var(--danger); }
 .share-mail { grid-column: 1 / -1; display: grid; gap: 6px; padding-top: 16px; border-top: 1px solid var(--line); }
 .share-mail label { font-weight: 600; margin: 0; }
 .share-mail .copy { max-width: 620px; }

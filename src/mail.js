@@ -43,6 +43,7 @@ async function send({ to, subject, html, text, fromName, replyTo }) {
 }
 
 // ---------- the delivery email ----------
+const retention = require('./retention');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const RED = '#D93A24';
 const INK = '#111113';
@@ -61,7 +62,12 @@ function deliveryEmail({ project: p, brand, link, origin, fileCount, totalSize, 
   const what = typeLabel ? typeLabel.toLowerCase() : 'project';
   const facts = [
     fileCount ? `${fileCount} file${fileCount === 1 ? '' : 's'} · ${fmtSize(totalSize)}` : null,
-    p.expires_at ? `Available until ${fmtDate(p.expires_at)}` : null,
+    (() => {
+      const until = retention.lastDay(p);
+      if (until) return `${until.deleting ? 'Files are removed on' : 'Available until'} ${fmtDate(until.at)}`;
+      return null;
+    })(),
+    p.auto_delete && !p.delete_at && p.allow_download ? `Files are removed ${retention.daysText} after your first download` : null,
     p.password_hash ? `Password protected. ${studio} will send you the password.` : null,
   ].filter(Boolean);
   const subject = `${studio} sent you ${p.title}`;
