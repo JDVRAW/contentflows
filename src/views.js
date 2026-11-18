@@ -584,7 +584,12 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
       // Without folders there's no folder bar, so the loose files' Sort menu sits with the tools above.
       const sortsUp = !anyFolder;
       const firstFolder = groups.find((x) => x.folder), lastGroup = groups[groups.length - 1];
-      return (sortsUp && groups[0].items.length > 1 ? `<div class="files-sort">${sortMenu(p, groups[0])}</div>` : '') + groups.map((g) => {
+      // Folder tabs: "All" shows every folder; a folder's tab shows only that folder. Drag files onto a tab to move them there.
+      const tabs = anyFolder ? `<div class="folder-tabs" role="tablist" aria-label="Folders">
+        <button class="ftab" type="button" role="tab" data-tab="__all">All <span>${assets.length}</span></button>
+        ${groups.map((g) => `<button class="ftab${!g.folder && !g.items.length ? ' loose-empty' : ''}" type="button" role="tab" data-tab="${esc(g.folder)}" data-folder="${esc(g.folder)}" title="${g.folder ? 'Show only this folder' : 'Files not in a folder'}">${esc(g.label || 'No folder')} <span>${g.items.length}</span></button>`).join('')}
+      </div>` : '';
+      return tabs + (sortsUp && groups[0].items.length > 1 ? `<div class="files-sort">${sortMenu(p, groups[0])}</div>` : '') + groups.map((g) => {
         const carded = g.folder || anyFolder;
         const shut = carded && collapsed.includes(g.folder);
         const name = esc(g.label || 'No folder');

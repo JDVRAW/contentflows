@@ -48,6 +48,28 @@
   });
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && menu) { e.stopPropagation(); closeMenu(true); } }, true);
 
+  // Folder tabs: one folder at a time, or "All". The last tab picked is remembered on this device.
+  const tabs = root.querySelector('.folder-tabs');
+  if (tabs) {
+    const key = `cf-tab:${root.dataset.base}`;
+    const pick = (t, user) => {
+      let btn = [...tabs.querySelectorAll('[data-tab]')].find((b) => b.dataset.tab === t && !b.classList.contains('loose-empty'));
+      if (!btn) { t = '__all'; btn = tabs.querySelector('[data-tab="__all"]'); }
+      tabs.querySelectorAll('[data-tab]').forEach((b) => b.setAttribute('aria-selected', String(b === btn)));
+      root.classList.toggle('tab-folder', t !== '__all');
+      root.querySelectorAll('.file-group').forEach((g) => g.classList.toggle('tab-off', t !== '__all' && g.dataset.folder !== t));
+      const l = btn.offsetLeft - tabs.offsetLeft, r = l + btn.offsetWidth;
+      if (l < tabs.scrollLeft || r > tabs.scrollLeft + tabs.clientWidth) tabs.scrollLeft = l - 16;
+      if (user) {
+        try { localStorage.setItem(key, t); } catch (e) {}
+        root.dispatchEvent(new CustomEvent('files:tab'));
+      }
+    };
+    tabs.addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (b) pick(b.dataset.tab, true); });
+    let saved = null; try { saved = localStorage.getItem(key); } catch (e) {}
+    pick(saved || '__all');
+  }
+
   // "New folder" opens the name field under the heading.
   const nf = document.getElementById('new-folder'), nfBtn = root.querySelector('[data-new-folder]');
   const showNew = (on) => {
@@ -63,7 +85,8 @@
   const bar = document.getElementById('bulk');
   const root = document.getElementById('files');
   if (!bar || !root) return;
-  const boxes = () => [...root.querySelectorAll('.asset .pick input')];
+  // Only the files on show count: in a folder's tab, Select all picks that folder's files.
+  const boxes = () => [...root.querySelectorAll('.file-group:not(.tab-off) .asset .pick input')];
   const picked = () => boxes().filter((b) => b.checked);
   const count = bar.querySelector('[data-count]');
   const select = bar.querySelector('select[name="folder"]');
@@ -117,6 +140,7 @@
     sync();
   }
   bar.querySelector('[data-clear]').addEventListener('click', clearAll);
+  root.addEventListener('files:tab', () => { root.querySelectorAll('.asset .pick input').forEach((b) => (b.checked = false)); clearAll(); });
   addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && picked().length && !e.target.closest('input, select, textarea')) clearAll();
   });
@@ -169,7 +193,7 @@
     root.classList.remove('dragging-files');
     root.querySelectorAll('.dragging, .drop-on').forEach((x) => x.classList.remove('dragging', 'drop-on'));
   });
-  const groupAt = (e) => (dragIds ? e.target.closest?.('.file-group') : null);
+  const groupAt = (e) => (dragIds ? e.target.closest?.('.file-group, .ftab[data-folder]') : null);
   // While reordering, the dragged files slide in before or after the file under the pointer.
   function slide(e) {
     const over = e.target.closest?.('.asset');
@@ -209,7 +233,7 @@
       return;
     }
     // Dropped back where they already are: nothing to do.
-    if (ids.every((id) => root.querySelector(`.asset[data-id="${id}"]`)?.closest('.file-group') === g)) return;
+    if (ids.every((id) => root.querySelector(`.asset[data-id="${id}"]`)?.closest('.file-group')?.dataset.folder === folder)) return;
     try {
       const r = await post(bar.action, [['folder', folder], ...ids.map((id) => ['ids', id])]);
       const j = await r.json();
@@ -234,7 +258,7 @@
 
   // Folding folders shut. Each change is saved, so the page opens the same way next time.
   const foldBtn = root.querySelector('[data-fold-all]');
-  const groups = () => [...root.querySelectorAll('.file-group')].filter((g) => g.querySelector('.fold'));
+  const groups = () => [...root.querySelectorAll('.file-group')].filter((g) => g.querySelector('.fold') && !g.classList.contains('loose-empty'));
   const syncFoldAll = () => { if (foldBtn) foldBtn.querySelector('span').textContent = groups().every((g) => g.classList.contains('collapsed')) ? 'Open all' : 'Close all'; };
   function fold(g, shut) {
     if (g.classList.contains('collapsed') === shut) return;
