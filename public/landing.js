@@ -121,8 +121,8 @@
 
   // 2e. Why ContentFlows cards, after SOHub's services stack: the deck pins while each next card slides up
   //     from 120% below; every card it covers moves up 60px and shrinks by .05, so earlier cards peek out
-  //     above in a pile. Card one first settles from scale 1.05 as the deck arrives. Scrubbed and reversible.
-  //     Pixel transforms only, written only when they change, so scrolling stays on the compositor.
+  //     above in a pile. Scrubbed and reversible. Where the browser has scroll-driven animations the CSS
+  //     keyframes (deck-a/b/c) run it on the compositor; otherwise this computes the same transforms.
   const track = document.querySelector('.pillar-track');
   if (track && !reduced) {
     const cards = [...track.querySelectorAll('.pillar')];
@@ -130,34 +130,35 @@
     track.classList.add('stack-on');
     track.style.setProperty('--stages', stages);
     cards.forEach((c) => c.classList.add('in'));
-    const clamp = (v) => Math.min(1, Math.max(0, v));
-    const quadOut = (t) => 1 - (1 - t) * (1 - t);
-    const last = cards.map(() => '');
-    let cardH = 0, trackH = 0, vh = innerHeight;
-    const measure = () => { vh = innerHeight; cardH = cards[0].offsetHeight; trackH = track.offsetHeight; };
-    let queued = false;
-    const update = () => {
-      queued = false;
-      const top = track.getBoundingClientRect().top;
-      if (top + trackH < -100 || top > vh * 1.2) return;
-      const p = clamp(-top / Math.max(1, trackH - vh)) * stages;
-      const enter = clamp((vh * 1.1 - top) / (vh * 1.1));
-      const t = cards.map((_, i) => (i === 0 ? 1 : quadOut(clamp(p - (i - 1)))));
-      cards.forEach((c, i) => {
-        let covered = 0;
-        for (let k = i + 1; k < cards.length; k++) covered += t[k];
-        const y = (i === 0 ? 0 : 1.2 * cardH * (1 - t[i])) - 60 * covered;
-        const sc = (i === 0 ? 1.05 - 0.05 * enter : 1) - 0.05 * covered;
-        const v = `translate3d(0,${y.toFixed(1)}px,0) scale(${sc.toFixed(4)})`;
-        if (v !== last[i]) { c.style.transform = v; last[i] = v; }
-      });
-    };
-    const queue = () => { if (!queued) { queued = true; requestAnimationFrame(update); } };
-    addEventListener('scroll', queue, { passive: true });
-    addEventListener('resize', () => { measure(); queue(); });
-    addEventListener('load', () => { measure(); queue(); });
-    measure();
-    update();
+    if (stages === 2 && window.CSS && CSS.supports('animation-timeline: view()')) {
+      track.classList.add('stack-css');
+    } else {
+      const clamp = (v) => Math.min(1, Math.max(0, v));
+      const last = cards.map(() => '');
+      let cardH = 0, trackH = 0, vh = innerHeight;
+      const measure = () => { vh = innerHeight; cardH = cards[0].offsetHeight; trackH = track.offsetHeight; };
+      let queued = false;
+      const update = () => {
+        queued = false;
+        const top = track.getBoundingClientRect().top;
+        if (top + trackH < -100 || top > vh * 1.2) return;
+        const p = clamp(-top / Math.max(1, trackH - vh)) * stages;
+        const t = cards.map((_, i) => (i === 0 ? 1 : clamp(p - (i - 1))));
+        cards.forEach((c, i) => {
+          let covered = 0;
+          for (let k = i + 1; k < cards.length; k++) covered += t[k];
+          const y = (i === 0 ? 0 : 1.2 * cardH * (1 - t[i])) - 60 * covered;
+          const v = `translate3d(0,${y.toFixed(1)}px,0) scale(${(1 - 0.05 * covered).toFixed(4)})`;
+          if (v !== last[i]) { c.style.transform = v; last[i] = v; }
+        });
+      };
+      const queue = () => { if (!queued) { queued = true; requestAnimationFrame(update); } };
+      addEventListener('scroll', queue, { passive: true });
+      addEventListener('resize', () => { measure(); queue(); });
+      addEventListener('load', () => { measure(); queue(); });
+      measure();
+      update();
+    }
   }
 
   // 2f. Sections (01) to (05) stack like SOHub's cards: each sticks once its bottom reaches the viewport
