@@ -11,6 +11,14 @@ const LOGO = fs.readFileSync(path.join(__dirname, '..', 'public', 'brand', 'cont
   .replace(/fill="#111113"/g, 'fill="currentColor"')
   .trim();
 
+// The Vault's mark in ContentFlows' language: three stacked layers (the Vault keeps everything), the top
+// one in ContentFlows red. Paired with a "vault contentflows." wordmark set in Geist, like the domain.
+const VAULT_MARK = `<svg class="vault-mark" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <rect x="6" y="40" width="52" height="16" rx="6" fill="currentColor" opacity=".45"/>
+  <rect x="6" y="24" width="52" height="16" rx="6" fill="currentColor" opacity=".75"/>
+  <rect x="6" y="8" width="52" height="16" rx="6" fill="#E5402A"/></svg>`;
+const VAULT_LOGO = `<span class="vault-logo">${VAULT_MARK}<span class="vault-word"><b>vault</b>contentflows<i>.</i></span></span>`;
+
 // The four-square symbol as separate shapes so each one can be animated.
 const SYMBOL = (cls = '') => `<svg class="cf-symbol ${cls}" viewBox="5 5 54 54" aria-hidden="true" focusable="false">
   <rect class="sq sq1" x="5" y="5" width="22" height="22" rx="6"/><rect class="sq sq2" x="31" y="5" width="22" height="22" rx="6"/>
@@ -334,6 +342,11 @@ function landing() {
     <p class="lp-label reveal">(04) New in ContentFlows</p>
     <h2 class="lp-heading reveal">Less busywork. <span>More time behind the camera.</span></h2>
   </div>
+  <div class="lp-inner new-brands reveal" aria-label="Works together">
+    <a class="nb-tile" href="/signup"><span class="nb-logo">${LOGO}</span><span class="nb-cap">Deliver your work</span></a>
+    <span class="nb-plus" aria-hidden="true">+</span>
+    <a class="nb-tile" href="${VAULT_SITE}" target="_blank" rel="noopener"><span class="nb-logo">${VAULT_LOGO}</span><span class="nb-cap">Store every shoot · vaultcontentflows.com</span></a>
+  </div>
   <div class="lp-inner new-grid">
     <article class="new-card reveal" id="connect-ai">
       <div class="nv nv-ai" aria-hidden="true">
@@ -378,7 +391,7 @@ ${homePricing()}
     <div class="end-rule"></div>
     <nav class="end-links" aria-label="Footer"><a href="/signup">Sign up</a><a href="/login">Log in</a><a href="#why">Why us</a><a href="#how">How it works</a><a href="#new">AI and Vault</a><a href="#pricing">Pricing</a></nav>
   </div>
-  <div class="end-foot"><a class="foot-logo" href="/" aria-label="ContentFlows home">${LOGO}</a><span class="fs-mono">Final work delivery for creatives</span></div>
+  <div class="end-foot"><a class="foot-logo" href="/" aria-label="ContentFlows home">${LOGO}</a><a class="foot-vault" href="${VAULT_SITE}" target="_blank" rel="noopener" aria-label="Vault ContentFlows">${VAULT_LOGO}</a><span class="fs-mono">Final work delivery for creatives</span></div>
 </footer>` });
 }
 
