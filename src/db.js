@@ -110,7 +110,10 @@ for (const [name, type] of [['plan', "TEXT NOT NULL DEFAULT 'free'"], ['plan_int
   ['stripe_mode', 'TEXT'],
   // Branding (Pro and up): logo files under DATA_DIR/brand. logo_dark is the dark-ink version for
   // light backgrounds, logo_light the light-ink version for dark ones. Either can stand in for both.
-  ['logo_dark', 'TEXT'], ['logo_light', 'TEXT']]) {
+  ['logo_dark', 'TEXT'], ['logo_light', 'TEXT'],
+  // The creator's own Vault (their storage platform), connected under Connect: its address, a read-only
+  // access key made in the Vault, and the Vault account it opens (shown so they know which one).
+  ['vault_url', 'TEXT'], ['vault_key', 'TEXT'], ['vault_email', 'TEXT']]) {
   if (!userCols.has(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
 }
 

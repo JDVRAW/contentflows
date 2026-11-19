@@ -3,14 +3,11 @@
 // creator whose API key came with it. The key goes in an "Authorization: Bearer <key>" header, or
 // in the address itself (/mcp/<key>) for apps whose connector screens only take a URL.
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { z } = require('zod');
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
-const { download } = require('./fetch-file');
 const retention = require('./retention');
 
 const KEY_PREFIX = 'cf_';
@@ -19,8 +16,8 @@ const newKey = () => KEY_PREFIX + crypto.randomBytes(32).toString('base64url');
 
 // ctx: what the tools need from server.js (database, storage, plan checks, helpers).
 function mcpRouter(ctx) {
-  const { db, token, TYPES, storage, deleteDelivery, kindOf, makeThumb, insertAsset, removeAssetFiles, spaceProblem, spaceLeft, reserved,
-    usage, originOf, MAX_UPLOAD, UPLOADS, fmtSize, userView } = ctx;
+  const { db, token, TYPES, deleteDelivery, removeAssetFiles, importFile,
+    usage, originOf, fmtSize, userView } = ctx;
   const router = express.Router();
 
   const findKey = db.prepare('SELECT k.id AS key_id, u.* FROM api_keys k JOIN users u ON u.id = k.user_id WHERE k.key_hash = ?');
@@ -195,50 +192,11 @@ function mcpRouter(ctx) {
     }, async ({ delivery_id, url, filename }) => {
       const p = own(delivery_id);
       if (!p) return fail(`No delivery with id ${delivery_id}.`);
-      const full = spaceProblem(user, 1);
-      if (full) return fail(full);
-      const dir = path.join(UPLOADS, String(p.id));
-      fs.mkdirSync(dir, { recursive: true });
-      const tmp = path.join(dir, `${token(12)}.part`);
-      const hold = `mcp:${token(9)}`;
-      let got;
       try {
-        got = await download(url, tmp, {
-          maxBytes: (declared) => {
-            const max = Math.min(MAX_UPLOAD, spaceLeft(user));
-            // Hold the size against the plan while it downloads, like browser uploads do, so
-            // parallel uploads can't overshoot it.
-            reserved.set(hold, { userId: user.id, size: declared && declared <= max ? declared : max, at: Date.now() });
-            return max;
-          },
-        });
+        const f = await importFile(user, p, url, { filename });
+        return ok({ file: { id: f.id, name: f.name, kind: f.kind, size: fmtSize(f.size) }, delivery: summary(own(p.id)) });
       } catch (e) {
-        reserved.delete(hold);
-        if (e.code === 'ETOOBIG') return fail(spaceProblem(user, e.size) || `That file is over the ${fmtSize(MAX_UPLOAD)} limit per file.`);
-        return fail(`Couldn't get the file: ${e.message}`);
-      }
-      try {
-        const name = String(filename || got.name || 'file').replace(/[\\/\x00-\x1f]/g, '_').slice(0, 255) || 'file';
-        const kind = kindOf(got.type || '', name);
-        const ext = path.extname(name).toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 12);
-        let stored, where = null;
-        if (storage.enabled) {
-          stored = `projects/${p.id}/${token(12)}${ext}`;
-          await storage.putFile(stored, tmp, got.type);
-          where = 's3';
-        } else {
-          stored = token(12) + ext;
-          fs.renameSync(tmp, path.join(dir, stored));
-        }
-        const r = insertAsset.run(p.id, name, stored, got.type, got.size, kind, where, p.id);
-        const thumb = await makeThumb(where ? tmp : path.join(dir, stored), kind, r.lastInsertRowid);
-        if (thumb) db.prepare('UPDATE assets SET thumb_name = ? WHERE id = ?').run(thumb, r.lastInsertRowid);
-        return ok({ file: { id: Number(r.lastInsertRowid), name, kind, size: fmtSize(got.size) }, delivery: summary(own(p.id)) });
-      } catch (e) {
-        return fail(`The file downloaded but couldn't be saved: ${e.message}`);
-      } finally {
-        reserved.delete(hold);
-        fs.rm(tmp, { force: true }, () => {});
+        return fail(e.message);
       }
     });
 

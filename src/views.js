@@ -119,7 +119,7 @@ function appNav(user, current = '') {
           <div class="am-col"><p class="am-head">Deliver</p>${rows.map(row).join('')}</div>
           <div class="am-col am-col-right"><p class="am-head">New delivery</p>
             <a class="am-try" href="/dashboard#new" tabindex="-1" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><span class="am-try-core">${SYMBOL('')}<em>Drop your files</em></span></a>
-            <a class="am-row" href="/connect"><span class="am-ic">${APP_ICONS.ai}</span><span class="am-txt"><b>Connect AI${ARROW}</b><small>Deliver by asking your AI assistant</small></span></a>
+            <a class="am-row" href="/connect"><span class="am-ic">${APP_ICONS.ai}</span><span class="am-txt"><b>Connect AI${ARROW}</b><small>Your AI assistant and your Vault</small></span></a>
           </div>
         </div>
       </div>
@@ -531,10 +531,10 @@ function mailBox(p, mail) {
   </form>`;
 }
 
-function projectPage({ user, project: p, assets, folders = [], collapsed = [], folderLinks = {}, folderOrder = [], sorts = {}, stats, origin, saved, notice, mail = {}, direct, storageMissing, usage }) {
+function projectPage({ user, project: p, assets, folders = [], collapsed = [], folderLinks = {}, folderOrder = [], sorts = {}, stats, origin, saved, notice, mail = {}, direct, storageMissing, usage, vault }) {
   const link = `${origin}/d/${p.share_token}`;
   const left = usage && usage.plan.limit !== Infinity ? usage.plan.limit - usage.used : null;
-  return layout({ title: p.title, user, current: '/dashboard', scripts: ['/static/spiral.js', '/static/upload.js', '/static/files.js'], body: `
+  return layout({ title: p.title, user, current: '/dashboard', scripts: ['/static/spiral.js', '/static/upload.js', '/static/files.js', '/static/vault.js'], body: `
 <main class="wrap">
   <a class="back" href="/dashboard">← All deliveries</a>
   <div class="page-head"><div><span class="tag">${esc(TYPES[p.type] || p.type)}</span><h1>${esc(p.title)}</h1>
@@ -560,6 +560,7 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
         <input type="file" id="folder-input" webkitdirectory multiple hidden>
         <p><b>Drop files or folders here</b> or browse <button class="link" type="button" onclick="document.getElementById('file-input').click()">files</button> · <button class="link" type="button" onclick="document.getElementById('folder-input').click()">a folder</button></p>
         <p class="muted small">Photos, videos, audio, or any final files${direct ? ' · sent straight to cloud storage' : ''}${left > 0 ? ` · ${fmtSize(left)} left on your plan` : ''}</p>
+        <p class="vault-open-row">${vault ? '<button class="btn ghost small" type="button" data-vault-open>Add from Vault</button>' : '<a class="link small" href="/connect#vault">Connect your Vault</a> <span class="muted small">to add files from it</span>'}</p>
         ${left !== null && left <= 0 ? `<p class="q-error">Your ${esc(usage.plan.name)} plan is full, so new files can't be added. <a href="/pricing">See plans</a> or delete files you no longer need.</p>` : ''}
         ${storageMissing ? `<p class="q-error">Cloud storage is off because ${esc(storageMissing.join(', '))} ${storageMissing.length === 1 ? 'is' : 'are'} not set in the server's variables.</p>` : ''}
         <div class="uploading" id="uploading" hidden>${SYMBOL('anim-loader')}<span id="uploading-text">Uploading</span></div>
@@ -567,6 +568,17 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
       </div>
     </div>
   </section>
+
+  ${vault ? `<dialog class="vault-picker" id="vault-picker" data-project="${p.id}">
+    <div class="vp-head"><h3>Add from Vault</h3><button class="link" type="button" data-vault-close aria-label="Close">Close</button></div>
+    <nav class="vp-path" aria-label="Vault folders"></nav>
+    <div class="vp-list" aria-live="polite"></div>
+    <div class="vp-foot">
+      <label class="vp-folder">Put in <select name="folder"><option value="">No folder</option>${[...new Set(folders.concat(assets.map((a) => a.folder).filter(Boolean)))].sort().map((f) => `<option value="${esc(f)}">${esc(f)}</option>`).join('')}</select></label>
+      <button class="btn" type="button" data-vault-add disabled>Add files</button>
+    </div>
+    <div class="vp-progress" hidden></div>
+  </dialog>` : ''}
 
   <section id="files" data-base="/projects/${p.id}" data-view="grid">
     <script>try { const v = localStorage.getItem('cf-files-view'); if (['small', 'list'].includes(v)) document.currentScript.parentNode.dataset.view = v; } catch (e) {}</script>
@@ -794,7 +806,7 @@ function unlockPage({ project, studio, brand, error }) {
 
 // Connect AI: API keys for the MCP server (/mcp), and how to add ContentFlows to an assistant.
 // fresh: a key just made, shown this once with its connector address.
-function connectPage({ user, keys, origin, fresh, error }) {
+function connectPage({ user, keys, origin, fresh, error, vault, vaultError, vaultValues = {}, vaultNotice }) {
   const exampleUrl = fresh ? fresh.url : `${origin}/mcp/cf_your-key`;
   return layout({ title: 'Connect AI', user, current: '/connect', scripts: ['/static/upload.js'], body: `
 <main class="wrap connect">
@@ -806,6 +818,25 @@ function connectPage({ user, keys, origin, fresh, error }) {
     <div class="copy"><input readonly value="${esc(fresh.url)}" id="mcp-url"><button class="btn" type="button" data-copy="#mcp-url">Copy</button></div>
     <div class="copy"><input readonly value="${esc(fresh.key)}" id="mcp-key" aria-label="API key on its own"><button class="btn ghost" type="button" data-copy="#mcp-key">Copy key</button></div>
   </section>` : ''}
+
+  <section class="settings vault-connect" id="vault">
+    <h2>Your Vault</h2>
+    <p class="muted">Connect your storage Vault to pick files from it inside any delivery. Files are copied from the Vault at full quality, server to server, so big videos don't need to go through your computer.</p>
+    ${vaultNotice ? `<p class="ok">${esc(vaultNotice)}</p>` : ''}
+    ${vaultError ? `<p class="error">${esc(vaultError)}</p>` : ''}
+    ${vault ? `<div class="key-row"><div><b>Connected</b> <span class="muted small mono">${esc(vault.address.replace(/^https?:\/\//, ''))}</span>
+        ${vault.email ? `<p class="muted small">Vault account: ${esc(vault.email)}</p>` : ''}</div>
+        <form method="post" action="/connect/vault/remove"${confirmAttr('Disconnect your Vault? Files already added to deliveries stay where they are.')}><button class="btn ghost danger">Disconnect</button></form>
+      </div>` : `<ol class="muted small vault-steps">
+        <li>In your Vault, open <b>Security → Connected apps</b> and choose <b>Make a key</b>.</li>
+        <li>Paste your Vault's address and the key below.</li>
+      </ol>
+      <form method="post" action="/connect/vault" class="key-form vault-form">
+        <label>Vault address<input name="address" required placeholder="storage.yourstudio.com" value="${esc(vaultValues.address || '')}" autocomplete="off"></label>
+        <label>Access key<input name="key" required placeholder="spk_…" autocomplete="off" spellcheck="false"></label>
+        <button class="btn">Connect</button>
+      </form>`}
+  </section>
 
   <section class="settings">
     <h2>API keys</h2>
