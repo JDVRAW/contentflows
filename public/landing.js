@@ -30,6 +30,31 @@
     update();
   }
 
+  // 2b. Dusk scene, after Fora's hero: each [data-speed] layer moves translateY = d × (1 − speed/100),
+  //     d being how far the page has scrolled past the scene's top, so it rises slower than the page.
+  //     The foreground ridge has no speed and so scrolls normally, covering the preview as it goes.
+  const scene = document.querySelector('.scene');
+  if (scene) {
+    const layers = [...scene.querySelectorAll('[data-speed]')].map((el) => ({ el, k: 1 - Number(el.dataset.speed) / 100 }));
+    if (!reduced) {
+      scene.classList.add('scene-anim');
+      const seen = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { scene.classList.add('in'); seen.disconnect(); } }), { threshold: 0.15 });
+      seen.observe(scene);
+      let queued = false;
+      const update = () => {
+        queued = false;
+        const r = scene.getBoundingClientRect();
+        if (r.bottom < 0 || r.top > innerHeight) return;
+        const d = Math.max(0, -r.top);
+        layers.forEach(({ el, k }) => { el.style.transform = d ? `translate3d(0, ${(d * k).toFixed(1)}px, 0)` : ''; });
+      };
+      const queue = () => { if (!queued) { queued = true; requestAnimationFrame(update); } };
+      addEventListener('scroll', queue, { passive: true });
+      addEventListener('resize', queue);
+      update();
+    }
+  }
+
   // 3. Pointer square: sprung follow (stiffness 600, damping 60, mass 1), difference-blended.
   if (!reduced && matchMedia('(hover: hover) and (pointer: fine)').matches) {
     const sq = document.createElement('div');
