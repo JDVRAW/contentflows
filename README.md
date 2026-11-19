@@ -47,14 +47,27 @@ ContentFlows is also a remote [MCP](https://modelcontextprotocol.io) server, so 
 
 - **Keys**: on `/connect` (Connect AI in the header) a creator makes a named API key. It's shown once; only its SHA-256 hash is stored. Keys can be revoked there, and the page shows when each was last used.
 - **Address**: `POST /mcp/<key>` (for apps whose connector screen only takes a URL, like Claude's custom connectors), or `POST /mcp` with `Authorization: Bearer <key>`. Streamable HTTP, stateless, JSON responses. Keys in addresses are masked in error logs.
-- **Tools**: `list_deliveries`, `get_delivery`, `create_delivery`, `update_delivery` (title, client, message, password, expiry, downloads), `add_file_from_url`, `set_cover`, `remove_file`, `new_share_link`, `delete_delivery`, `get_storage`. Every tool only sees the key owner's deliveries. The tools that delete or replace something (`remove_file`, `new_share_link`, `delete_delivery`) are marked destructive, so assistants ask before running them.
+- **Tools**: `list_deliveries`, `get_delivery`, `create_delivery`, `update_delivery` (title, client, message, password, expiry, downloads), `add_file_from_url`, `search_google_drive`, `add_files_from_google_drive`, `browse_vault`, `add_files_from_vault`, `get_import_status`, `set_cover`, `remove_file`, `new_share_link`, `delete_delivery`, `get_storage`. Every tool only sees the key owner's deliveries. The tools that delete or replace something (`remove_file`, `new_share_link`, `delete_delivery`) are marked destructive, so assistants ask before running them.
 - **Files by link**: `add_file_from_url` downloads a public http(s) link (Dropbox and Google Drive share links are turned into their download links), checks the per-file limit and the creator's plan while it downloads, makes a thumbnail, and stores the file on disk or in the bucket like any upload. Only public internet addresses are allowed: links to this server, private networks or cloud metadata addresses are refused, including after redirects. Very large videos are better uploaded in the app, since assistants stop waiting after a while.
+
+- **Files from Google Drive**: once the creator connects Google Drive (below), `add_files_from_google_drive` copies Drive files into a delivery without them being shared publicly. It takes Drive links or ids, of files or of a folder (the files directly inside it are added; subfolders and Google Docs/Sheets/Slides are listed as skipped). `search_google_drive` finds files by name or lists a folder. `add_file_from_url` also opens Drive links through the connected Drive. Drive and Vault copies run in the background, one file at a time per delivery, so a big video doesn't hold the assistant's request open; `get_import_status` reports each file as waiting, copying, done or failed.
 
 Try it with Claude Code:
 
 ```bash
 claude mcp add --transport http contentflows https://your-site/mcp/cf_your-key
 ```
+
+## Google Drive
+
+Creators can let their AI assistant copy files from their own Google Drive into deliveries, so client files don't have to be made public first.
+
+1. In ContentFlows, open **Connect AI → Google Drive** and choose **Connect Google Drive**. Google asks them to allow read-only access.
+2. Ask the assistant, for example "Add the videos in my Drive folder Finals to Ana's delivery, in a folder called Reels."
+
+Only the refresh token and the Google account's email are kept (`users.gdrive_refresh`, `users.gdrive_email`); **Disconnect** revokes the token at Google. Files are downloaded server to server from the Drive API (`src/gdrive.js`) and stored like any upload.
+
+Setup, once per server: in Google Cloud, enable the **Google Drive API**, make an OAuth consent screen with the scopes `openid`, `email` and `drive.readonly`, and a **Web application** OAuth client whose authorised redirect URI is `<your site>/connect/google/callback`. Put its id and secret in `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Without them the Google Drive section is hidden. `drive.readonly` is a restricted scope: until Google verifies the app, it works for up to 100 test users you add on the consent screen, who see an "unverified app" warning.
 
 ## Your Vault (storage platform)
 
@@ -90,6 +103,7 @@ npm start            # http://localhost:3000
 | `S3_BUCKET` | | Bucket name |
 | `S3_ACCESS_KEY_ID` | | Access key of an API token with object read and write on the bucket |
 | `S3_SECRET_ACCESS_KEY` | | Its secret |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | | Google OAuth client for Connect Google Drive (see Google Drive above). Without them the feature is off |
 | `RESEND_API_KEY` | | [Resend](https://resend.com) API key (Sending access is enough). Turns on "Email the link" |
 | `MAIL_FROM` | | Address the emails come from, on a domain verified in Resend, e.g. `deliveries@yourdomain.com` |
 | `MAIL_DAILY_LIMIT` | `50` | Addresses each creator can email per 24 hours |

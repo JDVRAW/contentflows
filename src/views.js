@@ -957,7 +957,7 @@ function unlockPage({ project, studio, brand, error }) {
 
 // Connect AI: API keys for the MCP server (/mcp), and how to add ContentFlows to an assistant.
 // fresh: a key just made, shown this once with its connector address.
-function connectPage({ user, keys, origin, fresh, error, vault, vaultError, vaultValues = {}, vaultNotice }) {
+function connectPage({ user, keys, origin, fresh, error, vault, vaultError, vaultValues = {}, vaultNotice, google, googleError, googleNotice }) {
   const exampleUrl = fresh ? fresh.url : `${origin}/mcp/cf_your-key`;
   return layout({ title: 'Connect AI', user, current: '/connect', scripts: ['/static/upload.js'], body: `
 <main class="wrap connect">
@@ -968,6 +968,17 @@ function connectPage({ user, keys, origin, fresh, error, vault, vaultError, vaul
     <div><h3>Your connector address for ${esc(fresh.name)}</h3><p class="muted small">Copy it now: it won't be shown again. Anyone with it can manage your deliveries, so keep it private.</p></div>
     <div class="copy"><input readonly value="${esc(fresh.url)}" id="mcp-url"><button class="btn" type="button" data-copy="#mcp-url">Copy</button></div>
     <div class="copy"><input readonly value="${esc(fresh.key)}" id="mcp-key" aria-label="API key on its own"><button class="btn ghost" type="button" data-copy="#mcp-key">Copy key</button></div>
+  </section>` : ''}
+
+  ${google ? `<section class="settings vault-connect" id="google">
+    <h2>Google Drive</h2>
+    <p class="muted">Let your AI assistant copy files from your Google Drive into a delivery. They don't need to be shared publicly: ContentFlows reads them with your permission and copies them at full quality, server to server. Access is read-only, and you can disconnect any time.</p>
+    ${googleNotice ? `<p class="ok">${esc(googleNotice)}</p>` : ''}
+    ${googleError ? `<p class="error">${esc(googleError)}</p>` : ''}
+    ${google.connected ? `<div class="key-row"><div><b>Connected</b>${google.email ? ` <span class="muted small">${esc(google.email)}</span>` : ''}
+        <p class="muted small">Try: "Add the videos in this Drive folder to the Ana López delivery."</p></div>
+        <form method="post" action="/connect/google/remove"${confirmAttr('Disconnect Google Drive? Files already added to deliveries stay where they are.')}><button class="btn ghost danger">Disconnect</button></form>
+      </div>` : `<form method="post" action="/connect/google" class="key-form"><button class="btn">Connect Google Drive</button></form>`}
   </section>` : ''}
 
   <section class="settings vault-connect" id="vault">
@@ -1017,6 +1028,7 @@ function connectPage({ user, keys, origin, fresh, error, vault, vaultError, vaul
     <h3>Things to ask</h3>
     <ul class="muted">
       <li>"Create a photoshoot delivery for Ana López, add the photos from this Dropbox link, and give me the link."</li>
+      <li>"Add the videos in my Drive folder &quot;Finals&quot; to Ana's delivery, in a folder called Reels." (connect Google Drive above first)</li>
       <li>"Put a password on the Nike commercial delivery and make it expire at the end of the month."</li>
       <li>"Which deliveries haven't been downloaded yet?"</li>
     </ul>
