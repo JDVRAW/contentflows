@@ -1405,3 +1405,41 @@ dialog.vault-picker[open] { display: flex; }
   .nb-plus { justify-self: center; font-size: 22px; line-height: 1; }
   .foot-vault { display: none; }
 }
+
+/* Home page dusk scene (after the hero), after Fora's landscape hero: far and near ridges and the
+   delivery preview drift up slower than the page (speeds 69, 83, 80), while the foreground ridge
+   scrolls normally, rises over the preview and runs into the dark section below. */
+.scene { position: relative; overflow: hidden; margin: 0; background: #111113; color: #f1efe9; text-align: center;
+  padding: clamp(120px, 17vh, 190px) 24px 0; isolation: isolate; }
+.scene-sky { position: absolute; inset: 0; z-index: -1;
+  background: radial-gradient(60% 45% at 50% 78%, rgba(240,146,72,.55), transparent 70%),
+    linear-gradient(180deg, #15131c 0%, #241d2d 28%, #4a2e3e 52%, #9a4b3a 72%, #d77a3f 84%, #3b2a3a 100%); }
+.scene-layer { position: absolute; left: 0; right: 0; bottom: 0; pointer-events: none; }
+.scene-layer svg { display: block; width: 100%; height: 100%; }
+.scene-px { height: 100%; will-change: transform; }
+.scene-far { height: 58%; z-index: 0; }
+.scene-near { height: 46%; z-index: 1; }
+.scene-fore { height: 30%; z-index: 3; }
+.scene-fore::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 40%; background: #111113; }
+.scene-copy { position: relative; z-index: 2; max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; }
+.scene-chip { font: 400 13px var(--geist); color: rgba(241,239,233,.82); padding: 5px 12px; border-radius: 999px;
+  border: 1px solid rgba(241,239,233,.18); background: rgba(17,17,19,.25); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.scene-title { margin: 22px 0 16px; font: 400 clamp(34px, 4.6vw, 64px)/1.06 var(--geist); letter-spacing: -.03em; color: #f6f3ec; }
+.scene-sub { margin: 0 0 30px; max-width: 460px; font: 400 16px/1.55 var(--geist); color: rgba(241,239,233,.68); }
+.scene-mock-wrap { position: relative; z-index: 2; width: min(1040px, 100%); margin: clamp(48px, 7vh, 80px) auto 0; padding-bottom: clamp(150px, 20vw, 300px); }
+.scene-mock { height: auto; border-radius: 16px; overflow: hidden; background: #1a1a1d; border: 1px solid rgba(255,255,255,.1);
+  box-shadow: 0 50px 120px -30px rgba(0,0,0,.75); text-align: left; }
+.scene-mock img { display: block; width: 100%; height: auto; }
+/* Entrance: ridges rise 72, 48 and 36px into place over a second, without overshoot. */
+.scene-anim .scene-far, .scene-anim .scene-near, .scene-anim .scene-fore {
+  transition: transform 1s cubic-bezier(.22, 1, .36, 1), opacity 1s ease; }
+.scene-anim:not(.in) .scene-far { transform: translateY(72px); opacity: 0; }
+.scene-anim:not(.in) .scene-near { transform: translateY(48px); opacity: 0; }
+.scene-anim:not(.in) .scene-fore { transform: translateY(36px); }
+@media (max-width: 760px) {
+  .scene { padding-top: 110px; }
+  .scene-sub { font-size: 15px; }
+  .scene-mock-wrap { margin-top: 40px; padding-bottom: 120px; }
+  .scene-mock { border-radius: 10px; }
+  .scene-far { height: 46%; } .scene-near { height: 36%; } .scene-fore { height: 22%; }
+}
