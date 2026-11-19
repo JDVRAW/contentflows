@@ -1133,3 +1133,79 @@ html.sheet-open, html.sheet-open body { overflow: hidden; }
   .folder-tabs { margin: 0 -16px 14px; padding: 2px 16px; }
   #files.tab-folder .file-group.fcard > .asset-grid { margin: 0; }
 }
+
+/* Files view: large thumbnails (default), small thumbnails, or a list with full names */
+.files-bar { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 10px 18px; margin: 0 0 14px; }
+.files-bar:empty { display: none; }
+.files-bar .folder-sort { margin: 0; }
+.view-switch { display: flex; align-items: center; gap: 8px; }
+.view-btns { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 999px; }
+.view-btn { width: 34px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 999px; background: transparent;
+  color: var(--muted); cursor: pointer; transition: background .15s, color .15s; }
+.view-btn:hover { color: var(--text); }
+.view-btn[aria-pressed="true"] { background: var(--surface-2); color: var(--text); }
+.view-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.asset .a-cols, .asset .a-ext, .asset .nudge .v { display: none; }
+#files:not([data-view="list"]) .a-name wbr { display: none; }
+
+/* Small thumbnails: more files on screen */
+#files[data-view="small"] .asset-grid, #files[data-view="small"] .file-group.fcard > .asset-grid { grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+#files[data-view="small"] .asset { border-radius: 10px; }
+#files[data-view="small"] .asset-meta { padding: 7px 8px 3px; }
+#files[data-view="small"] .asset-meta .a-name { font-size: 12px; }
+#files[data-view="small"] .asset-meta .a-sub { font-size: 11px; }
+#files[data-view="small"] .asset-actions { gap: 6px 7px; padding: 0 8px 8px; flex-wrap: wrap; align-items: center; }
+#files[data-view="small"] .asset-actions .link { font-size: 12px; }
+#files[data-view="small"] .asset-actions .nudge { gap: 3px; }
+#files[data-view="small"] .asset-actions .nudge .order-btn { width: 20px; height: 20px; font-size: 12px; }
+#files[data-view="small"] .badge { right: 6px; bottom: 6px; font-size: 10px; padding: 1px 6px; }
+#files[data-view="small"] .badge > span { display: none; }
+#files[data-view="small"] .badge.left { left: 6px; right: auto; }
+#files[data-view="small"] .asset.picked .badge.left { left: 38px; }
+#files[data-view="small"] .file-icon { font-size: 12px; }
+
+/* List: one file per row, the whole name, then kind, size, downloads and date */
+#files[data-view="list"] .asset-grid, #files[data-view="list"] .file-group.fcard > .asset-grid { grid-template-columns: minmax(0, 1fr); gap: 0;
+  border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+#files[data-view="list"] .asset { display: grid; grid-template-columns: 26px 64px minmax(0, 1fr) 96px 76px 104px 96px 196px; align-items: center; gap: 14px;
+  padding: 8px 14px 8px 10px; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; overflow: visible; }
+#files[data-view="list"] .asset:first-child { border-top: 0; }
+#files[data-view="list"] .asset:hover { background: var(--surface-2); }
+#files[data-view="list"] .asset.picked { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: none; }
+#files[data-view="list"] .asset .pick { position: static; opacity: 1; background: none; }
+#files[data-view="list"] .thumb { width: 64px; border-radius: 6px; overflow: hidden; }
+#files[data-view="list"] .file-icon { font-size: 10px; padding: 4px; letter-spacing: .04em; }
+#files[data-view="list"] .badge { right: 3px; bottom: 3px; font-size: 9px; padding: 0 5px; }
+#files[data-view="list"] .badge > span { display: none; }
+#files[data-view="list"] .badge.left, #files[data-view="list"] .asset.picked .badge.left { left: 3px; right: auto; bottom: auto; top: 3px; }
+#files[data-view="list"] .asset-meta { padding: 0; min-width: 0; }
+#files[data-view="list"] .asset-meta .a-name { white-space: normal; overflow: visible; overflow-wrap: break-word; font-size: 14px; line-height: 1.35; }
+#files[data-view="list"] .asset-meta .a-sub { display: none; }
+#files[data-view="list"] .a-cols { display: contents; }
+#files[data-view="list"] .a-cols > span { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#files[data-view="list"] .asset-actions { padding: 0; gap: 12px; flex-wrap: nowrap; justify-content: flex-end; }
+#files[data-view="list"] .asset-actions .nudge .h { display: none; }
+#files[data-view="list"] .asset-actions .nudge .v { display: inline; }
+@media (max-width: 1100px) {
+  #files[data-view="list"] .asset { grid-template-columns: 26px 56px minmax(0, 1fr) 90px 72px 100px 190px; }
+  #files[data-view="list"] .a-cols .a-date { display: none; }
+  #files[data-view="list"] .thumb { width: 56px; }
+}
+@media (max-width: 760px) {
+  .files-bar { justify-content: space-between; }
+  .files-bar .view-switch:only-child { margin-left: auto; }
+  .view-switch > .muted { display: none; }
+  .view-btn { width: 36px; height: 30px; }
+  #files[data-view="small"] .asset-grid, #files[data-view="small"] .file-group.fcard > .asset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  #files[data-view="small"] .asset-meta { padding: 6px 7px 2px; }
+  #files[data-view="small"] .asset-meta .a-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #files[data-view="small"] .asset-actions { padding: 0 7px 7px; gap: 4px 8px; }
+  #files[data-view="list"] .asset { grid-template-columns: 22px 56px minmax(0, 1fr); grid-template-areas: "pick thumb meta" "pick thumb actions"; gap: 4px 12px; padding: 10px 12px 10px 8px; }
+  #files[data-view="list"] .asset .pick { grid-area: pick; width: 22px; }
+  #files[data-view="list"] .thumb { grid-area: thumb; width: 56px; align-self: start; }
+  #files[data-view="list"] .asset-meta { grid-area: meta; }
+  #files[data-view="list"] .asset-meta .a-sub { display: block; margin-top: 2px; }
+  #files[data-view="list"] .asset-meta .a-ext { display: inline; }
+  #files[data-view="list"] .a-cols { display: none; }
+  #files[data-view="list"] .asset-actions { grid-area: actions; justify-content: flex-start; flex-wrap: wrap; gap: 6px 14px; margin-top: 2px; }
+}

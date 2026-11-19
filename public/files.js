@@ -70,6 +70,18 @@
     pick(saved || '__all');
   }
 
+  // View: large thumbnails, small thumbnails or a list. Kept on this device for every delivery
+  // (the page sets it before the files draw; this keeps the buttons in step and saves changes).
+  const views = [...root.querySelectorAll('.view-btn')];
+  const setView = (v, user) => {
+    if (!views.some((b) => b.dataset.view === v)) v = 'grid';
+    root.dataset.view = v;
+    views.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === v)));
+    if (user) try { localStorage.setItem('cf-files-view', v); } catch (e) {}
+  };
+  views.forEach((b) => b.addEventListener('click', () => setView(b.dataset.view, true)));
+  setView(root.dataset.view);
+
   // "New folder" opens the name field under the heading.
   const nf = document.getElementById('new-folder'), nfBtn = root.querySelector('[data-new-folder]');
   const showNew = (on) => {
@@ -199,7 +211,9 @@
     const over = e.target.closest?.('.asset');
     if (!over || over.classList.contains('dragging') || over.parentNode !== reorder.grid) return;
     const r = over.getBoundingClientRect();
-    const after = e.clientY > r.bottom ? true : e.clientY < r.top ? false : e.clientX > r.left + r.width / 2;
+    // In the list, rows stack, so the pointer's height decides; in the grids it's left or right half.
+    const after = e.clientY > r.bottom ? true : e.clientY < r.top ? false
+      : root.dataset.view === 'list' ? e.clientY > r.top + r.height / 2 : e.clientX > r.left + r.width / 2;
     const moving = [...reorder.grid.querySelectorAll('.asset.dragging')];
     if (after) over.after(...moving); else over.before(...moving);
   }
