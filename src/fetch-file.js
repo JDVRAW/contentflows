@@ -9,13 +9,24 @@ const fs = require('fs');
 const net = require('net');
 const path = require('path');
 
-const blocked = new net.BlockList();
+// Two lists, one per family. Node's BlockList matches an IPv4 address against IPv4-mapped IPv6
+// rules (::ffff:0:0/96), so mixing them in one list made every IPv4 address look private.
+const blocked4 = new net.BlockList();
 for (const [a, bits] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16],
   ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15],
-  ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]]) blocked.addSubnet(a, bits, 'ipv4');
-for (const [a, bits] of [['::', 128], ['::1', 128], ['::ffff:0:0', 96], ['64:ff9b::', 96], ['100::', 64], ['2001:db8::', 32],
-  ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]]) blocked.addSubnet(a, bits, 'ipv6');
-const isPublic = (address, family) => !blocked.check(address, family === 6 || family === 'IPv6' ? 'ipv6' : 'ipv4');
+  ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]]) blocked4.addSubnet(a, bits, 'ipv4');
+const blocked6 = new net.BlockList();
+for (const [a, bits] of [['::', 128], ['::1', 128], ['64:ff9b::', 96], ['100::', 64], ['2001:db8::', 32],
+  ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]]) blocked6.addSubnet(a, bits, 'ipv6');
+function isPublic(address, family) {
+  const v6 = family === 6 || family === 'IPv6' || net.isIPv6(address);
+  if (!v6) return !blocked4.check(address, 'ipv4');
+  // An IPv4 address written as IPv6 (::ffff:10.0.0.1) is judged as the IPv4 address it carries.
+  const mapped = String(address).match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (mapped) return !blocked4.check(mapped[1], 'ipv4');
+  if (/^::ffff:/i.test(address)) return false; // mapped, but in hex form: refuse rather than guess
+  return !blocked6.check(address, 'ipv6');
+}
 
 function lookup(hostname, options, cb) {
   dns.lookup(hostname, { ...options, all: true }, (err, list) => {
