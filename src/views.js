@@ -272,12 +272,14 @@ function landing() {
   </div>
 </section>
 
+<div class="sec-stack">
 <section class="lp lp-light" data-header-theme="dark" id="why">
   <div class="lp-inner">
     <p class="lp-label reveal">(01) Why ContentFlows</p>
     <h2 class="lp-statement" data-words>Your work leaves the studio <span>exactly as you made it. No compression, no watermarks, no surprises for your client.</span></h2>
   </div>
-  <div class="lp-inner pillar-grid">
+  <div class="lp-inner pillar-track">
+  <div class="pillar-grid">
     <article class="pillar reveal" id="quality">
       <div class="pv pv-quality" aria-hidden="true">
         <div class="pvq-row"><em>Original</em><span>campaign_031.tif</span><b>248.6 MB</b></div>
@@ -310,6 +312,7 @@ function landing() {
       <h3>One link. Nothing to install.</h3>
       <p>No account, no app. Opens on any device.</p>
     </article>
+  </div>
   </div>
 </section>
 
@@ -402,6 +405,7 @@ function landing() {
 </section>
 
 ${homePricing()}
+</div>
 
 <section class="arch" aria-hidden="true"><div class="arch-layer"><img src="/static/arch.jpg" alt="" decoding="async"></div></section>
 <footer class="end" data-header-theme="light">
