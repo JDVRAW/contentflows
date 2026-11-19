@@ -122,6 +122,7 @@
   // 2e. Why ContentFlows cards, after SOHub's services stack: the deck pins while each next card slides up
   //     from 120% below; every card it covers moves up 60px and shrinks by .05, so earlier cards peek out
   //     above in a pile. Card one first settles from scale 1.05 as the deck arrives. Scrubbed and reversible.
+  //     Pixel transforms only, written only when they change, so scrolling stays on the compositor.
   const track = document.querySelector('.pillar-track');
   if (track && !reduced) {
     const cards = [...track.querySelectorAll('.pillar')];
@@ -131,56 +132,46 @@
     cards.forEach((c) => c.classList.add('in'));
     const clamp = (v) => Math.min(1, Math.max(0, v));
     const quadOut = (t) => 1 - (1 - t) * (1 - t);
+    const last = cards.map(() => '');
+    let cardH = 0, trackH = 0, vh = innerHeight;
+    const measure = () => { vh = innerHeight; cardH = cards[0].offsetHeight; trackH = track.offsetHeight; };
     let queued = false;
     const update = () => {
       queued = false;
-      const r = track.getBoundingClientRect();
-      if (r.bottom < -100 || r.top > innerHeight * 1.2) return;
-      const run = Math.max(1, track.offsetHeight - innerHeight);
-      const p = clamp(-r.top / run) * stages;
-      const enter = clamp((innerHeight * 1.1 - r.top) / (innerHeight * 1.1));
+      const top = track.getBoundingClientRect().top;
+      if (top + trackH < -100 || top > vh * 1.2) return;
+      const p = clamp(-top / Math.max(1, trackH - vh)) * stages;
+      const enter = clamp((vh * 1.1 - top) / (vh * 1.1));
       const t = cards.map((_, i) => (i === 0 ? 1 : quadOut(clamp(p - (i - 1)))));
       cards.forEach((c, i) => {
         let covered = 0;
         for (let k = i + 1; k < cards.length; k++) covered += t[k];
-        const y = i === 0 ? 0 : 120 * (1 - t[i]);
-        const s = (i === 0 ? 1.05 - 0.05 * enter : 1) - 0.05 * covered;
-        c.style.transform = `translate3d(0, calc(${y.toFixed(2)}% - ${(60 * covered).toFixed(1)}px), 0) scale(${s.toFixed(4)})`;
-      });
-    };
-    const queue = () => { if (!queued) { queued = true; requestAnimationFrame(update); } };
-    addEventListener('scroll', queue, { passive: true });
-    addEventListener('resize', queue);
-    update();
-  }
-
-  // 2f. Sections (01) to (05) stack like SOHub's cards: each sticks once its bottom reaches the viewport
-  //     bottom (top = min(0, viewport − height)), the next slides over it, and the covered one shrinks
-  //     by .05 as it is covered, scrubbed to scroll.
-  const stack = document.querySelector('.sec-stack');
-  if (stack && !reduced) {
-    const secs = [...stack.children].filter((el) => el.tagName === 'SECTION');
-    stack.classList.add('stack-on');
-    const clamp = (v) => Math.min(1, Math.max(0, v));
-    const measure = () => secs.forEach((s) => { s.style.top = `${Math.min(0, innerHeight - s.offsetHeight)}px`; });
-    let queued = false;
-    const update = () => {
-      queued = false;
-      secs.forEach((s, i) => {
-        const next = secs[i + 1];
-        if (!next) return;
-        const t = clamp((innerHeight - next.getBoundingClientRect().top) / innerHeight);
-        s.style.transform = t ? `scale(${(1 - 0.05 * t).toFixed(4)})` : '';
-        s.style.setProperty('--shade', (t * 0.45).toFixed(3));
+        const y = (i === 0 ? 0 : 1.2 * cardH * (1 - t[i])) - 60 * covered;
+        const sc = (i === 0 ? 1.05 - 0.05 * enter : 1) - 0.05 * covered;
+        const v = `translate3d(0,${y.toFixed(1)}px,0) scale(${sc.toFixed(4)})`;
+        if (v !== last[i]) { c.style.transform = v; last[i] = v; }
       });
     };
     const queue = () => { if (!queued) { queued = true; requestAnimationFrame(update); } };
     addEventListener('scroll', queue, { passive: true });
     addEventListener('resize', () => { measure(); queue(); });
     addEventListener('load', () => { measure(); queue(); });
-    if ('ResizeObserver' in window) new ResizeObserver(() => { measure(); queue(); }).observe(stack);
     measure();
     update();
+  }
+
+  // 2f. Sections (01) to (05) stack like SOHub's cards: each sticks once its bottom reaches the viewport
+  //     bottom (top = min(0, viewport − height)) and the next one slides over it. Pure CSS sticky while
+  //     scrolling; JS only measures the sticky offsets on load and resize.
+  const stack = document.querySelector('.sec-stack');
+  if (stack && !reduced) {
+    const secs = [...stack.children].filter((el) => el.tagName === 'SECTION');
+    stack.classList.add('stack-on');
+    const measure = () => secs.forEach((s) => { s.style.top = `${Math.min(0, innerHeight - s.offsetHeight)}px`; });
+    addEventListener('resize', measure);
+    addEventListener('load', measure);
+    if ('ResizeObserver' in window) new ResizeObserver(measure).observe(stack);
+    measure();
   }
 
   // 3. Pointer square: sprung follow (stiffness 600, damping 60, mass 1), difference-blended.

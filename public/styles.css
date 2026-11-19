@@ -1457,8 +1457,8 @@ dialog.vault-picker[open] { display: flex; }
 .pillar-track.stack-on .pillar-grid::before { content: ''; display: block; height: 100%; }
 .stack-on .pillar { position: absolute; left: 0; right: 0; top: calc(96px + max(0px, (100% - 728px) / 2)); height: calc(100% - 128px); max-height: 600px; margin: 0;
   display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); grid-template-rows: 1fr auto auto auto; column-gap: clamp(32px, 5vw, 80px);
-  padding: clamp(36px, 4.5vw, 64px); box-sizing: border-box; border-radius: 32px; background: #111113; overflow: hidden; clip-path: inset(0 round 32px);
-  transform-origin: 50% 0; will-change: transform; --lp-fg: #f1efe9; --lp-muted: #9a978f; }
+  padding: clamp(36px, 4.5vw, 64px); box-sizing: border-box; border-radius: 32px; background: #111113; overflow: hidden;
+  transform-origin: 50% 0; will-change: transform; backface-visibility: hidden; --lp-fg: #f1efe9; --lp-muted: #9a978f; }
 .stack-on .pillar:nth-child(2) { background: #1e1e21; }
 .stack-on .pillar:nth-child(3) { background: #2c2c30; }
 .stack-on .pillar:nth-child(1) { z-index: 1; } .stack-on .pillar:nth-child(2) { z-index: 2; } .stack-on .pillar:nth-child(3) { z-index: 3; }
@@ -1470,7 +1470,7 @@ dialog.vault-picker[open] { display: flex; }
 @media (max-width: 767px) {
   .pillar-track.stack-on .pillar-grid { padding: 84px 0 20px; }
   .stack-on .pillar { top: 84px; height: calc(100% - 104px); max-height: none; grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto auto auto;
-    padding: 20px 20px 26px; border-radius: 24px; clip-path: inset(0 round 24px); }
+    padding: 20px 20px 26px; border-radius: 24px; }
   .stack-on .pillar .pv { grid-column: 1; grid-row: 1; height: auto; min-height: 0; margin-bottom: 20px; }
   .stack-on .pillar .pillar-num, .stack-on .pillar h3, .stack-on .pillar p { grid-column: 1; }
   .stack-on .pillar h3 { font-size: 32px; margin: 12px 0 10px; }
@@ -1479,8 +1479,7 @@ dialog.vault-picker[open] { display: flex; }
 
 /* Sections (01)-(05) stack as cards (landing.js 2f). */
 .sec-stack.stack-on { background: #0a0a0b; }
-.stack-on > section.lp { position: sticky; border-radius: 32px 32px 0 0; transform-origin: 50% calc(100% - 50vh); will-change: transform; }
+.stack-on > section.lp { position: sticky; border-radius: 32px 32px 0 0; }
 .stack-on > section.lp:first-child { border-radius: 0; }
-.stack-on > section.lp::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: #000; opacity: var(--shade, 0); pointer-events: none; }
-.stack-on > section.lp:not(:first-child) { box-shadow: 0 -24px 60px -20px rgba(0,0,0,.35); }
+.stack-on > section.lp:not(:first-child) { box-shadow: 0 -20px 40px -24px rgba(0,0,0,.4); }
 @media (max-width: 767px) { .stack-on > section.lp { border-radius: 22px 22px 0 0; } }
