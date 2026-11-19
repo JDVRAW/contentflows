@@ -394,12 +394,36 @@ function autoDeleteField(p) {
   </div>`;
 }
 
-function dashboard({ user, projects, usage }) {
+// The creator's Vault (their storage platform). Overridable so a self-hosted Vault can be linked instead.
+const VAULT_SITE = (process.env.VAULT_SITE_URL || 'https://www.vaultcontentflows.com').replace(/\/$/, '');
+
+// Dashboard card telling creators about Add from Vault. Shown until they connect a Vault or close it.
+const vaultPromo = () => `<section class="vault-promo" id="vault-promo" aria-labelledby="vault-promo-title">
+    <div class="vp-mark" aria-hidden="true">${SYMBOL()}</div>
+    <div class="vp-copy">
+      <p class="vp-eyebrow"><span class="new-pill">New</span> ContentFlows Vault</p>
+      <h2 id="vault-promo-title">Add files straight from your Vault</h2>
+      <p class="muted">Connect your Vault once and every delivery gets an <b>Add from Vault</b> button. Files copy over at full quality, server to server, so big videos never go through your computer.</p>
+      <div class="vp-actions">
+        <a class="btn" href="/connect#vault">Connect your Vault</a>
+        <a class="btn ghost" href="${VAULT_SITE}" target="_blank" rel="noopener">Open the Vault</a>
+      </div>
+    </div>
+    <form method="post" action="/vault-promo/hide" class="vp-close" data-vault-promo-hide>
+      <button class="vp-x" aria-label="Hide this">×</button>
+    </form>
+  </section>
+  <script>(() => { const f = document.querySelector('[data-vault-promo-hide]'); if (!f) return;
+    f.addEventListener('submit', (e) => { e.preventDefault(); document.getElementById('vault-promo').remove();
+      fetch(f.action, { method: 'POST', headers: { Accept: 'application/json' } }).catch(() => {}); }); })();</script>`;
+
+function dashboard({ user, projects, usage, vaultPromo: showVaultPromo }) {
   return layout({ title: 'Deliveries', user, current: '/dashboard', body: `
 <main class="wrap">
   <div class="page-head"><div><h1>Deliveries</h1><p class="muted">${projects.length} project${projects.length === 1 ? '' : 's'}</p></div>
   <a class="btn" href="#new">New delivery</a></div>
   ${usage ? storageMeter(usage) : ''}
+  ${showVaultPromo ? vaultPromo() : ''}
   ${projects.length ? `<div class="cards">${projects.map((p) => `
     <a class="card" href="/projects/${p.id}">
       <div class="cover">${p.cover_thumb ? `<img src="/d/${p.share_token}/thumb/${p.cover_id}" alt="">` : '<div class="cover-empty"></div>'}</div>
@@ -560,7 +584,7 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
         <input type="file" id="folder-input" webkitdirectory multiple hidden>
         <p><b>Drop files or folders here</b> or browse <button class="link" type="button" onclick="document.getElementById('file-input').click()">files</button> · <button class="link" type="button" onclick="document.getElementById('folder-input').click()">a folder</button></p>
         <p class="muted small">Photos, videos, audio, or any final files${direct ? ' · sent straight to cloud storage' : ''}${left > 0 ? ` · ${fmtSize(left)} left on your plan` : ''}</p>
-        <p class="vault-open-row">${vault ? '<button class="btn ghost small" type="button" data-vault-open>Add from Vault</button>' : '<a class="link small" href="/connect#vault">Connect your Vault</a> <span class="muted small">to add files from it</span>'}</p>
+        <p class="vault-open-row">${vault ? '<button class="btn ghost small" type="button" data-vault-open>Add from Vault</button>' : '<span class="new-pill">New</span> <a class="link small" href="/connect#vault">Connect your Vault</a> <span class="muted small">to add files from it</span>'}</p>
         ${left !== null && left <= 0 ? `<p class="q-error">Your ${esc(usage.plan.name)} plan is full, so new files can't be added. <a href="/pricing">See plans</a> or delete files you no longer need.</p>` : ''}
         ${storageMissing ? `<p class="q-error">Cloud storage is off because ${esc(storageMissing.join(', '))} ${storageMissing.length === 1 ? 'is' : 'are'} not set in the server's variables.</p>` : ''}
         <div class="uploading" id="uploading" hidden>${SYMBOL('anim-loader')}<span id="uploading-text">Uploading</span></div>
@@ -828,7 +852,7 @@ function connectPage({ user, keys, origin, fresh, error, vault, vaultError, vaul
         ${vault.email ? `<p class="muted small">Vault account: ${esc(vault.email)}</p>` : ''}</div>
         <form method="post" action="/connect/vault/remove"${confirmAttr('Disconnect your Vault? Files already added to deliveries stay where they are.')}><button class="btn ghost danger">Disconnect</button></form>
       </div>` : `<ol class="muted small vault-steps">
-        <li>In your Vault, open <b>Security → Connected apps</b> and choose <b>Make a key</b>.</li>
+        <li>In <a href="${VAULT_SITE}" target="_blank" rel="noopener">your Vault</a>, open <b>Security → Connected apps</b> and choose <b>Make a key</b>.</li>
         <li>Paste your Vault's address and the key below.</li>
       </ol>
       <form method="post" action="/connect/vault" class="key-form vault-form">
