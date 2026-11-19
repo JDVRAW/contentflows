@@ -56,6 +56,16 @@ Try it with Claude Code:
 claude mcp add --transport http contentflows https://your-site/mcp/cf_your-key
 ```
 
+## Your Vault (storage platform)
+
+Creators who keep their footage in their own Vault (the separate storage platform) can pick files from it inside any delivery:
+
+1. In the Vault, open **Security → Connected apps** and make a key. Keys are read-only: they can list folders and download files, nothing else.
+2. In ContentFlows, open **Connect AI → Your Vault** and paste the Vault's address and the key. ContentFlows checks it before saving.
+3. On a delivery, choose **Add from Vault**, tick files (or a whole folder's worth) and pick which delivery folder they go in.
+
+The server copies each file from the Vault itself (`src/vault.js`, `src/import-file.js`), one at a time per delivery, and the page shows progress. Files arrive at full quality and count toward the creator's plan. Copies still running are lost if the server restarts; just add them again.
+
 ## Run locally
 
 Requires Node 20+ and ffmpeg (optional, for thumbnails).

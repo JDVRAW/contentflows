@@ -15,6 +15,8 @@ const { PLANS, PAID, INTERVALS, planOf, canBrand, brandOf } = require('./src/pla
 const V = require('./src/views');
 const { mcpRouter, newKey, hashKey } = require('./src/mcp');
 const mail = require('./src/mail');
+const vault = require('./src/vault');
+const { makeImporter } = require('./src/import-file');
 const retention = require('./src/retention');
 
 const PORT = process.env.PORT || 3000;
@@ -273,7 +275,8 @@ app.get('/projects/:id', requireUser, ownProject, (req, res) => {
   res.send(V.projectPage({ user: req.user, project: p, assets, folders, collapsed, folderLinks, folderOrder, sorts, saved: req.query.saved, notice: req.query.notice,
     mail: { enabled: mail.enabled, partlySet: mail.partlySet, sent: !!req.query.emailed, error: req.query.mail_error, maxTo: MAIL_MAX_TO },
     stats: { views: stats.views || 0, downloads: stats.downloads || 0, last: stats.last },
-    origin: originOf(req), direct: storage.enabled, storageMissing: storage.partlySet, usage: usage(req.user) }));
+    origin: originOf(req), direct: storage.enabled, storageMissing: storage.partlySet, usage: usage(req.user),
+    vault: !!vault.connected(req.user) }));
 });
 
 app.post('/projects/:id/settings', requireUser, ownProject, (req, res) => {
@@ -797,22 +800,131 @@ const mcpUrl = (req, key) => `${originOf(req)}/mcp/${key}`;
 const keysOf = (userId) => db.prepare('SELECT id, name, hint, last_used_at, created_at FROM api_keys WHERE user_id = ? ORDER BY id DESC').all(userId);
 
 app.get('/connect', requireUser, (req, res) => {
-  res.send(V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req) }));
+  res.send(V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req), vault: vaultView(req.user),
+    vaultNotice: req.query.vault === 'connected' ? 'Your Vault is connected. Open a delivery and choose Add from Vault.' : null }));
 });
 app.post('/connect/keys', requireUser, (req, res) => {
   const name = String(req.body.name || '').trim().slice(0, 80) || 'AI assistant';
   if (keysOf(req.user.id).length >= 20)
-    return res.status(400).send(V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req), error: 'You have 20 keys. Revoke one you no longer use first.' }));
+    return res.status(400).send(V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req), vault: vaultView(req.user), error: 'You have 20 keys. Revoke one you no longer use first.' }));
   const key = newKey();
   db.prepare('INSERT INTO api_keys (user_id, name, key_hash, hint) VALUES (?, ?, ?, ?)').run(req.user.id, name, hashKey(key), key.slice(-4));
   // Shown once, on this page; only its hash is kept.
   res.set('Cache-Control', 'no-store');
-  res.send(V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req), fresh: { name, key, url: mcpUrl(req, key) } }));
+  res.send(V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req), vault: vaultView(req.user), fresh: { name, key, url: mcpUrl(req, key) } }));
 });
 app.post('/connect/keys/:kid/delete', requireUser, (req, res) => {
   db.prepare('DELETE FROM api_keys WHERE id = ? AND user_id = ?').run(req.params.kid, req.user.id);
   res.redirect('/connect');
 });
+// ---------- creator: Vault ----------
+// The creator's own storage platform. They paste its address and a read-only access key made there;
+// then each delivery page has "Add from Vault", which copies the picked files in server to server.
+const vaultView = (user) => (vault.connected(user) ? { address: user.vault_url, email: user.vault_email } : null);
+const connectWith = (req, extra) => V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req), vault: vaultView(req.user), ...extra });
+
+app.post('/connect/vault', requireUser, async (req, res) => {
+  const address = vault.cleanAddress(req.body.address);
+  const key = String(req.body.key || '').trim();
+  const values = { address: req.body.address || '' };
+  if (!address) return res.status(400).send(connectWith(req, { vaultError: 'Enter your Vault’s address, like storage.yourstudio.com.', vaultValues: values }));
+  if (!/^spk_[\w-]{20,}$/.test(key)) return res.status(400).send(connectWith(req, { vaultError: 'Paste the access key from your Vault (it starts with spk_).', vaultValues: values }));
+  let email;
+  try { email = await vault.check(address, key); } catch (e) {
+    return res.status(400).send(connectWith(req, { vaultError: e.message, vaultValues: values }));
+  }
+  db.prepare('UPDATE users SET vault_url = ?, vault_key = ?, vault_email = ? WHERE id = ?').run(address, key, email || null, req.user.id);
+  res.redirect('/connect?vault=connected#vault');
+});
+app.post('/connect/vault/remove', requireUser, (req, res) => {
+  db.prepare('UPDATE users SET vault_url = NULL, vault_key = NULL, vault_email = NULL WHERE id = ?').run(req.user.id);
+  res.redirect('/connect#vault');
+});
+
+const needVault = (req, res, next) => (vault.connected(req.user) ? next()
+  : res.status(409).json({ ok: false, error: 'Connect your Vault first, under Connect.', connect: '/connect#vault' }));
+
+// One folder of the Vault (or its top level) for the picker.
+app.get('/vault/browse', requireUser, needVault, async (req, res) => {
+  try {
+    const r = await vault.browse(req.user, req.query.folder ? String(req.query.folder) : null);
+    res.set('Cache-Control', 'no-store');
+    res.json({ ok: true, path: r.path || [], folders: r.folders || [], files: r.files || [] });
+  } catch (e) {
+    res.status(e.status === 401 ? 409 : 502).json({ ok: false, error: e.message });
+  }
+});
+
+// A Vault file's thumbnail, passed through so the key stays on this server.
+app.get('/vault/thumb/:fileId', requireUser, needVault, async (req, res) => {
+  let r;
+  try { r = await vault.thumbnail(req.user, req.params.fileId); } catch (e) { return res.status(404).end(); }
+  const type = String(r.headers['content-type'] || '');
+  if (r.statusCode !== 200 || !/^image\/(jpeg|png|webp|gif)$/.test(type.split(';')[0].trim())) { r.resume(); return res.status(404).end(); }
+  res.set({ 'Content-Type': type, 'Cache-Control': 'private, max-age=3600', 'X-Content-Type-Options': 'nosniff' });
+  if (r.headers['content-length']) res.set('Content-Length', r.headers['content-length']);
+  r.pipe(res);
+  res.on('close', () => r.destroy());
+});
+
+// Copies run one file at a time per delivery, in the background, so a 650 MB video doesn't hold a
+// request open. The page polls for progress. Kept in memory: a restart drops copies not yet done.
+const vaultJobs = new Map(); // project id -> { items: [{ key, vaultId, name, size, state, error }], running }
+const jobView = (job) => ({ ok: true, running: !!(job && job.running),
+  items: job ? job.items.map(({ key, name, size, state, error }) => ({ key, name, size, state, error })) : [] });
+
+async function runVaultJob(projectId) {
+  const job = vaultJobs.get(projectId);
+  if (!job || job.running) return;
+  job.running = true;
+  try {
+    for (let item; (item = job.items.find((i) => i.state === 'waiting'));) {
+      item.state = 'copying';
+      const p = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId);
+      const owner = p && db.prepare('SELECT * FROM users WHERE id = ?').get(p.user_id);
+      const src = owner && vault.source(owner, item.vaultId);
+      if (!src) { item.state = 'failed'; item.error = p ? 'Your Vault isn’t connected any more.' : 'The delivery was deleted.'; continue; }
+      try {
+        const f = await importFile(billing.view(owner), p, src.url, { headers: src.headers, folder: item.folder });
+        item.state = 'done';
+        item.name = f.name;
+      } catch (e) {
+        item.state = 'failed';
+        item.error = /HTTP 401/.test(e.message) ? 'Your Vault key was removed or is wrong. Connect your Vault again.' : e.message;
+      }
+    }
+  } finally {
+    job.running = false;
+    job.finishedAt = Date.now();
+  }
+}
+// Forget finished jobs after a day.
+setInterval(() => {
+  for (const [id, j] of vaultJobs) if (!j.running && j.finishedAt && Date.now() - j.finishedAt > 24 * 3600e3) vaultJobs.delete(id);
+}, 3600e3).unref();
+
+app.get('/projects/:id/vault', requireUser, ownProject, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(jobView(vaultJobs.get(req.project.id)));
+});
+app.post('/projects/:id/vault', requireUser, ownProject, needVault, express.json({ limit: '256kb' }), (req, res) => {
+  const files = Array.isArray(req.body && req.body.files) ? req.body.files.slice(0, 500) : [];
+  const picked = files.filter((f) => f && /^[\w-]{1,64}$/.test(String(f.id || '')));
+  if (!picked.length) return res.status(400).json({ ok: false, error: 'Pick at least one file.' });
+  const full = spaceProblem(req.user, picked.reduce((n, f) => n + (Number(f.size) || 0), 0));
+  if (full) return res.status(413).json({ ok: false, error: full, upgrade: '/pricing' });
+  const folder = cleanFolder(req.body.folder);
+  let job = vaultJobs.get(req.project.id);
+  // A new batch after the last one finished starts a fresh list.
+  if (!job || (!job.running && !job.items.some((i) => i.state === 'waiting'))) vaultJobs.set(req.project.id, (job = { items: [] }));
+  for (const f of picked) {
+    job.items.push({ key: token(6), vaultId: String(f.id), name: String(f.name || 'file').slice(0, 255),
+      size: Number(f.size) || 0, folder, state: 'waiting', error: null });
+  }
+  runVaultJob(req.project.id).catch((e) => console.error('vault import', e));
+  res.json(jobView(job));
+});
+
 // ---------- creator: profile ----------
 // One page for the creator's own account: their name and login email, the brand/studio name
 // clients see (every plan), their logo (Pro and up) and their password.
@@ -926,9 +1038,10 @@ app.get('/brand/:file', (req, res) => {
   res.sendFile(path.join(BRAND, f), { maxAge: '365d', immutable: true }, (e) => { if (e && !res.headersSent) res.status(404).end(); });
 });
 
+const importFile = makeImporter({ db, token, storage, kindOf, makeThumb, insertAsset, spaceProblem, spaceLeft, reserved, MAX_UPLOAD, UPLOADS, fmtSize: V.fmtSize });
+
 app.use('/mcp', mcpRouter({
-  db, token, TYPES: V.TYPES, storage, deleteDelivery, kindOf, makeThumb, insertAsset, removeAssetFiles, spaceProblem, spaceLeft, reserved,
-  usage, originOf, MAX_UPLOAD, UPLOADS, fmtSize: V.fmtSize, userView: billing.view,
+  db, token, TYPES: V.TYPES, deleteDelivery, removeAssetFiles, importFile, usage, originOf, fmtSize: V.fmtSize, userView: billing.view,
 }));
 
 // ---------- client: delivery ----------

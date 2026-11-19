@@ -47,7 +47,9 @@ function nameFrom(res, url) {
 
 // Resolves to { size, name, type }. maxBytes(contentLength) returns the most bytes this file may
 // have; going over it stops the download with err.code 'ETOOBIG'.
-function download(raw, dest, { maxBytes, timeoutMs = 10 * 60 * 1000, redirects = 5 } = {}) {
+// headers: extra request headers (such as a Vault access key). They are only sent to the link's own
+// site: a redirect to another site drops them.
+function download(raw, dest, { maxBytes, timeoutMs = 10 * 60 * 1000, redirects = 5, headers = {} } = {}) {
   let url;
   try { url = new URL(directLink(raw)); } catch (e) { return Promise.reject(Object.assign(new Error('That is not a valid link.'), { code: 'EBADURL' })); }
   if (!['http:', 'https:'].includes(url.protocol))
@@ -60,11 +62,12 @@ function download(raw, dest, { maxBytes, timeoutMs = 10 * 60 * 1000, redirects =
     return Promise.reject(Object.assign(new Error('Links with a username or password in them are not supported.'), { code: 'EBADURL' }));
   return new Promise((resolve, reject) => {
     const lib = url.protocol === 'https:' ? https : http;
-    const req = lib.get(url, { lookup, timeout: 30000, headers: { 'User-Agent': 'ContentFlows/1.0', Accept: '*/*' } }, (res) => {
+    const req = lib.get(url, { lookup, timeout: 30000, headers: { 'User-Agent': 'ContentFlows/1.0', Accept: '*/*', ...headers } }, (res) => {
       if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
         res.resume();
         if (!redirects) return reject(Object.assign(new Error('That link redirects too many times.'), { code: 'EREDIRECT' }));
-        return resolve(download(new URL(res.headers.location, url).toString(), dest, { maxBytes, timeoutMs, redirects: redirects - 1 }));
+        const next = new URL(res.headers.location, url);
+        return resolve(download(next.toString(), dest, { maxBytes, timeoutMs, redirects: redirects - 1, headers: next.origin === url.origin ? headers : {} }));
       }
       if (res.statusCode !== 200) {
         res.resume();
@@ -101,4 +104,37 @@ function download(raw, dest, { maxBytes, timeoutMs = 10 * 60 * 1000, redirects =
   });
 }
 
-module.exports = { download, isPublic };
+// Opens a public http(s) address with the same safety checks as download() and resolves to the
+// response (status, headers, body stream). No redirects are followed. For small API calls and
+// thumbnails; the caller reads or pipes the body.
+function open(raw, { headers = {}, timeoutMs = 20000 } = {}) {
+  let url;
+  try { url = new URL(raw); } catch (e) { return Promise.reject(Object.assign(new Error('That is not a valid address.'), { code: 'EBADURL' })); }
+  if (!['http:', 'https:'].includes(url.protocol)) return Promise.reject(Object.assign(new Error('Only http and https addresses work.'), { code: 'EBADURL' }));
+  const host = url.hostname.replace(/^\[|\]$/g, '');
+  if (net.isIP(host) && !isPublic(host, net.isIP(host)))
+    return Promise.reject(Object.assign(new Error('That address is private.'), { code: 'EPRIVATE' }));
+  return new Promise((resolve, reject) => {
+    const lib = url.protocol === 'https:' ? https : http;
+    const req = lib.get(url, { lookup, timeout: timeoutMs, headers: { 'User-Agent': 'ContentFlows/1.0', Accept: '*/*', ...headers } }, resolve);
+    req.on('timeout', () => req.destroy(Object.assign(new Error('The address did not answer in time.'), { code: 'ETIMEDOUT' })));
+    req.on('error', reject);
+  });
+}
+
+// GET a JSON API with open(). Resolves to { status, body } (body null when it isn't JSON).
+async function getJson(raw, opts = {}) {
+  const res = await open(raw, { ...opts, headers: { Accept: 'application/json', ...(opts.headers || {}) } });
+  const chunks = [];
+  let size = 0;
+  for await (const c of res) {
+    size += c.length;
+    if (size > 5 * 1024 * 1024) { res.destroy(); throw Object.assign(new Error('The answer was too big.'), { code: 'ETOOBIG' }); }
+    chunks.push(c);
+  }
+  let body = null;
+  try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch (e) {}
+  return { status: res.statusCode, body };
+}
+
+module.exports = { download, open, getJson, isPublic };
