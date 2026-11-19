@@ -55,6 +55,70 @@
     }
   }
 
+  // 2c. Intro text, after Fora's "Intro" block: the statement is split into words that light up one by one
+  //     as it travels from 85% to 35% of the viewport height, so reading pace follows scroll pace.
+  const statements = [...document.querySelectorAll('[data-words]')];
+  if (statements.length && !reduced) {
+    const groups = statements.map((el) => {
+      const words = [];
+      const split = (node) => {
+        [...node.childNodes].forEach((n) => {
+          if (n.nodeType === 3) {
+            const frag = document.createDocumentFragment();
+            n.textContent.split(/(\s+)/).forEach((part) => {
+              if (!part) return;
+              if (/^\s+$/.test(part)) { frag.appendChild(document.createTextNode(part)); return; }
+              const w = document.createElement('span');
+              w.className = 'w'; w.textContent = part; words.push(w); frag.appendChild(w);
+            });
+            n.replaceWith(frag);
+          } else if (n.nodeType === 1) split(n);
+        });
+      };
+      split(el);
+      el.classList.add('words-on');
+      return { el, words };
+    });
+    let queued = false;
+    const update = () => {
+      queued = false;
+      groups.forEach(({ el, words }) => {
+        const r = el.getBoundingClientRect();
+        const start = innerHeight * 0.85, end = innerHeight * 0.35;
+        const p = Math.min(1, Math.max(0, (start - (r.top + r.height / 2)) / (start - end)));
+        const lit = p * words.length;
+        words.forEach((w, i) => { w.style.opacity = (0.16 + 0.84 * Math.min(1, Math.max(0, lit - i))).toFixed(3); });
+      });
+    };
+    const queue = () => { if (!queued) { queued = true; requestAnimationFrame(update); } };
+    addEventListener('scroll', queue, { passive: true });
+    addEventListener('resize', queue);
+    update();
+  }
+
+  // 2d. Depth on product previews outside the scene: same Fora rule, translateY = d × (1 − speed/100),
+  //     with d measured from the viewport centre so each preview sits in place when it is centred.
+  //     Uses the CSS translate property so it stacks with the reveal transform.
+  const drift = [...document.querySelectorAll('[data-speed]')].filter((el) => !el.closest('.scene'));
+  if (drift.length && !reduced) {
+    const items = drift.map((el) => ({ el, k: 1 - Number(el.dataset.speed) / 100 }));
+    let queued = false;
+    const update = () => {
+      queued = false;
+      const narrow = innerWidth < 720;
+      items.forEach(({ el, k }) => {
+        const r = el.getBoundingClientRect();
+        if (r.bottom < -200 || r.top > innerHeight + 200) return;
+        const d = (r.top + r.height / 2) - innerHeight / 2;
+        el.style.translate = `0 ${(d * k * (narrow ? 0.5 : 1)).toFixed(1)}px`;
+      });
+    };
+    const queue = () => { if (!queued) { queued = true; requestAnimationFrame(update); } };
+    addEventListener('scroll', queue, { passive: true });
+    addEventListener('resize', queue);
+    update();
+  }
+
   // 3. Pointer square: sprung follow (stiffness 600, damping 60, mass 1), difference-blended.
   if (!reduced && matchMedia('(hover: hover) and (pointer: fine)').matches) {
     const sq = document.createElement('div');

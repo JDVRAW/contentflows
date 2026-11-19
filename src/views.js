@@ -275,7 +275,7 @@ function landing() {
 <section class="lp lp-light" data-header-theme="dark" id="why">
   <div class="lp-inner">
     <p class="lp-label reveal">(01) Why ContentFlows</p>
-    <h2 class="lp-statement reveal">Your work leaves the studio <span>exactly as you made it.</span></h2>
+    <h2 class="lp-statement" data-words>Your work leaves the studio <span>exactly as you made it. No compression, no watermarks, no surprises for your client.</span></h2>
   </div>
   <div class="lp-inner pillar-grid">
     <article class="pillar reveal" id="quality">
@@ -326,7 +326,7 @@ function landing() {
         <li>Switch off downloads or replace a link in one click</li>
       </ul>
     </div>
-    <div class="mock reveal" aria-hidden="true">
+    <div class="mock reveal" data-speed="90" aria-hidden="true">
       <div class="mock-bar"><i></i><i></i><i></i><em>Private link · /d/golden-hour</em></div>
       <div class="mock-hero">
         <div class="mock-title">Golden Hour Campaign<br><span>for Maya Rivers.</span></div>
@@ -371,7 +371,7 @@ function landing() {
   </div>
   <div class="lp-inner new-grid">
     <article class="new-card reveal" id="connect-ai">
-      <div class="nv nv-ai" aria-hidden="true">
+      <div class="nv nv-ai" data-speed="93" aria-hidden="true">
         <div class="nva-msg you">Create a photoshoot delivery for Ana López, add the photos from this Dropbox link and send me the link.</div>
         <div class="nva-msg ai">
           <span class="nva-tool">${SYMBOL()}<em>ContentFlows</em><b>3 actions</b></span>
@@ -385,7 +385,7 @@ function landing() {
       <a class="fs-cta new-cta" href="/signup">Connect your AI</a>
     </article>
     <article class="new-card reveal" id="vault">
-      <div class="nv nv-vault" aria-hidden="true">
+      <div class="nv nv-vault" data-speed="88" aria-hidden="true">
         <div class="nvv-head"><em>Add from Vault</em><span>Vault / 2026 / Golden Hour</span></div>
         <div class="nvv-row on"><i></i><span>hero_cut_4K.mov</span><b>8.4 GB</b></div>
         <div class="nvv-row on"><i></i><span>campaign_031.tif</span><b>248.6 MB</b></div>
