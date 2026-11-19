@@ -417,13 +417,60 @@ const vaultPromo = () => `<section class="vault-promo" id="vault-promo" aria-lab
     f.addEventListener('submit', (e) => { e.preventDefault(); document.getElementById('vault-promo').remove();
       fetch(f.action, { method: 'POST', headers: { Accept: 'application/json' } }).catch(() => {}); }); })();</script>`;
 
+// Initials for a profile with no photo yet: "Lumen Studio" → "LS".
+const initials = (s) => String(s || '').trim().split(/\s+/).slice(0, 2).map((w) => w[0] || '').join('').toUpperCase() || 'CF';
+const CAMERA = '<svg class="ui-ico" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
+const fmtCount = (n) => (n >= 10000 ? `${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}k` : String(n));
+
+// A file picker that uploads the moment a photo is chosen, from the Deliveries page.
+const photoPicker = (kind, label, cls) => `<form method="post" action="/profile/photo" enctype="multipart/form-data" class="photo-form ${cls}">
+    <input type="hidden" name="kind" value="${kind}"><input type="hidden" name="back" value="dashboard">
+    <label class="photo-pick" title="${label}">${CAMERA}<span>${label}</span><input type="file" name="photo" accept="image/jpeg,image/png,image/webp" required hidden></label>
+  </form>`;
+
+// The top of the Deliveries page, laid out like a profile: header photo, profile photo, name, bio, numbers.
+function profileHero(user, projects, usage) {
+  const name = user.studio || user.name;
+  const downloads = projects.reduce((n, p) => n + (p.download_count || 0), 0);
+  const views = projects.reduce((n, p) => n + (p.view_count || 0), 0);
+  const stored = usage ? usage.used : projects.reduce((n, p) => n + (p.total_size || 0), 0);
+  const stat = (v, l) => `<li><b>${v}</b><span>${l}</span></li>`;
+  return `<section class="ph" aria-label="Your profile">
+    <div class="ph-cover${user.header_photo ? '' : ' empty'}">
+      ${user.header_photo ? `<img src="/brand/${esc(user.header_photo)}" alt="">` : ''}
+      ${photoPicker('header', user.header_photo ? 'Change header' : 'Add header photo', 'ph-cover-edit')}
+    </div>
+    <div class="ph-bar">
+      <div class="ph-avatar">
+        ${user.avatar ? `<img src="/brand/${esc(user.avatar)}" alt="${esc(name)}">` : `<span class="ph-initials" aria-hidden="true">${esc(initials(name))}</span>`}
+        ${photoPicker('avatar', user.avatar ? 'Change profile photo' : 'Add profile photo', 'ph-avatar-edit')}
+      </div>
+      <div class="ph-id">
+        <h1>${esc(name)}</h1>
+        ${user.bio ? `<p class="ph-bio">${esc(user.bio)}</p>` : '<p class="ph-bio muted"><a class="link" href="/profile#look">Add a short bio</a> so clients know who you are</p>'}
+      </div>
+      <div class="ph-actions">
+        <a class="btn ghost" href="/profile#look">Edit profile</a>
+        <a class="btn" href="#new">New delivery</a>
+      </div>
+    </div>
+    <ul class="ph-stats">
+      ${stat(projects.length, projects.length === 1 ? 'Delivery' : 'Deliveries')}
+      ${stat(fmtSize(stored).replace(/\.0 /, ' '), 'Stored')}
+      ${stat(fmtCount(downloads), downloads === 1 ? 'Download' : 'Downloads')}
+      ${stat(fmtCount(views), views === 1 ? 'View' : 'Views')}
+    </ul>
+  </section>`;
+}
+
 function dashboard({ user, projects, usage, vaultPromo: showVaultPromo }) {
-  return layout({ title: 'Deliveries', user, current: '/dashboard', body: `
+  const unlimited = usage && usage.plan.limit === Infinity;
+  return layout({ title: 'Deliveries', user, current: '/dashboard', bodyClass: 'home-profile', scripts: ['/static/profile.js'], body: `
 <main class="wrap">
-  <div class="page-head"><div><h1>Deliveries</h1><p class="muted">${projects.length} project${projects.length === 1 ? '' : 's'}</p></div>
-  <a class="btn" href="#new">New delivery</a></div>
-  ${usage ? storageMeter(usage) : ''}
+  ${profileHero(user, projects, usage)}
+  ${usage && !unlimited ? storageMeter(usage) : ''}
   ${showVaultPromo ? vaultPromo() : ''}
+  <div class="ph-section-head"><h2>Deliveries</h2>${projects.length ? `<span class="muted small">${projects.length} project${projects.length === 1 ? '' : 's'}</span>` : ''}</div>
   ${projects.length ? `<div class="cards">${projects.map((p) => `
     <a class="card" href="/projects/${p.id}">
       <div class="cover">${p.cover_thumb ? `<img src="/d/${p.share_token}/thumb/${p.cover_id}" alt="">` : '<div class="cover-empty"></div>'}</div>
@@ -900,6 +947,23 @@ function connectPage({ user, keys, origin, fresh, error, vault, vaultError, vaul
 // Profile: the creator's own account in one place. Their name and login email, the brand/studio
 // name every plan shows clients, the logo that replaces it on Pro and up, and their password.
 // section: which form an error belongs to, so it shows next to that form.
+// One photo on the Profile page: a preview with Upload/Replace and Remove.
+function photoSlot(user, kind, title, hint) {
+  const file = kind === 'avatar' ? user.avatar : user.header_photo;
+  return `<div class="look-slot look-${kind}">
+    <div class="look-preview${file ? '' : ' empty'}">${file ? `<img src="/brand/${esc(file)}" alt="${esc(title)}">` : `<span>${kind === 'avatar' ? esc(initials(user.studio || user.name)) : 'No header yet'}</span>`}</div>
+    <div class="logo-info"><h3>${title}</h3><p class="muted small">${hint}</p>
+      <div class="row">
+        <form method="post" action="/profile/photo" enctype="multipart/form-data" class="photo-form">
+          <input type="hidden" name="kind" value="${kind}">
+          <label class="btn ghost small file-btn">${file ? 'Replace' : 'Upload'}<input type="file" name="photo" accept="image/jpeg,image/png,image/webp" required hidden></label>
+        </form>
+        ${file ? `<form method="post" action="/profile/photo/remove"><input type="hidden" name="kind" value="${kind}"><button class="btn ghost small danger">Remove</button></form>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+
 function profilePage({ user, canBrand, notice, error, section, values = {} }) {
   const name = user.studio || user.name;
   const err = (s) => (error && section === s ? `<p class="error">${esc(error)}</p>` : '');
@@ -923,9 +987,23 @@ function profilePage({ user, canBrand, notice, error, section, values = {} }) {
   return layout({ title: 'Profile', user, current: '/profile', scripts: ['/static/profile.js'], body: `
 <main class="wrap profile">
   <div class="page-head"><div><h1>Profile</h1>
-  <p class="muted">Your account, and how your studio appears to clients on every delivery.</p></div></div>
+  <p class="muted">Your account, your profile page, and how your studio appears to clients on every delivery.</p></div></div>
   ${notice ? `<p class="notice">${esc(notice)}</p>` : ''}
-  ${error && !['details', 'password', 'brand'].includes(section) ? `<p class="error">${esc(error)}</p>` : ''}
+  ${error && !['details', 'password', 'brand', 'look'].includes(section) ? `<p class="error">${esc(error)}</p>` : ''}
+
+  <section class="settings" id="look">
+    <h2>Profile page</h2>
+    <p class="muted small">Your Deliveries page opens with these, like a profile. JPG, PNG or WebP up to 15 MB. A wide photo works best for the header.</p>
+    ${err('look')}
+    <div class="look-slots">
+      ${photoSlot(user, 'avatar', 'Profile photo', 'Shown in a circle. Square photos crop best.')}
+      ${photoSlot(user, 'header', 'Header photo', 'Shown across the top of your Deliveries page.')}
+    </div>
+    <form method="post" action="/profile/bio" class="grid2 look-bio">
+      <label>Short bio <span class="muted">(up to 160 characters)</span><input name="bio" maxlength="160" value="${esc(user.bio || '')}" placeholder="Photo and film studio in Miami. Weddings, brands, music."></label>
+      <div class="row form-end"><button class="btn">Save bio</button></div>
+    </form>
+  </section>
 
   <section class="settings" id="details">
     <h2>Your details</h2>
