@@ -91,4 +91,24 @@ function thumbRatio(thumbName) {
   return r;
 }
 
-module.exports = { kindOf, makeThumb, thumbRatio };
+// A profile photo or header photo, re-encoded as a JPEG at a sensible size: the avatar cropped to a
+// centred square, the header kept wide. Re-encoding also drops whatever else was in the file (EXIF,
+// location). Resolves to the JPEG bytes, or null when ffmpeg can't read the image.
+const PHOTO_FILTERS = {
+  avatar: "crop='min(iw,ih)':'min(iw,ih)',scale=640:640",
+  header: "scale='min(2400,iw)':-2",
+};
+function squashPhoto(buf, mode) {
+  return new Promise((resolve) => {
+    const child = execFile('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-vf', PHOTO_FILTERS[mode],
+      '-frames:v', '1', '-q:v', '3', '-f', 'image2', '-c:v', 'mjpeg', 'pipe:1'],
+    { encoding: 'buffer', maxBuffer: 30 * 1024 * 1024, timeout: 30000 }, (err, stdout, stderr) => {
+      if (err || !stdout.length) { console.error(`photo resize failed: ${err ? reason(err, stderr) : 'no output'}`); return resolve(null); }
+      resolve(stdout);
+    });
+    child.stdin.on('error', () => {});
+    child.stdin.end(buf);
+  });
+}
+
+module.exports = { kindOf, makeThumb, thumbRatio, squashPhoto };

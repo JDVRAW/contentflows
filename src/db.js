@@ -115,7 +115,10 @@ for (const [name, type] of [['plan', "TEXT NOT NULL DEFAULT 'free'"], ['plan_int
   // access key made in the Vault, and the Vault account it opens (shown so they know which one).
   ['vault_url', 'TEXT'], ['vault_key', 'TEXT'], ['vault_email', 'TEXT'],
   // Set when the creator closes the "New: Add from Vault" card on their dashboard, so it stays closed.
-  ['vault_promo_hidden', 'INTEGER']]) {
+  ['vault_promo_hidden', 'INTEGER'],
+  // The creator's profile on their Deliveries page: a round profile photo, a wide header photo (files
+  // under DATA_DIR/brand, like logos) and a short line about them.
+  ['avatar', 'TEXT'], ['header_photo', 'TEXT'], ['bio', 'TEXT']]) {
   if (!userCols.has(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
 }
 

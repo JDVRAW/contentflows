@@ -8,7 +8,7 @@ const multer = require('multer');
 const { ZipArchive } = require('archiver');
 const { pipeline } = require('stream');
 const { db, DATA_DIR } = require('./src/db');
-const { kindOf, makeThumb } = require('./src/media');
+const { kindOf, makeThumb, squashPhoto } = require('./src/media');
 const storage = require('./src/storage');
 const billing = require('./src/billing');
 const { PLANS, PAID, INTERVALS, planOf, canBrand, brandOf } = require('./src/plans');
@@ -952,6 +952,7 @@ const profilePage = (req, extra = {}) => V.profilePage({ user: req.user, canBran
 const PROFILE_NOTICES = {
   details: 'Your details are saved.', password: 'Password changed. Other devices were logged out.',
   saved: 'Brand/Studio name saved.', logo: 'Logo saved. Your deliveries show it now.', removed: 'Logo removed.',
+  photo: 'Photo saved.', photo_removed: 'Photo removed.', bio: 'Bio saved.',
 };
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -1036,11 +1037,50 @@ app.post('/profile/logo/remove', requireUser, (req, res) => {
   }
   res.redirect('/profile?notice=removed#brand');
 });
+// Profile photo and header photo, on every plan. Saved as resized JPEGs next to the logos.
+const PHOTO_MAX = 15 * 1024 * 1024;
+const photoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: PHOTO_MAX, files: 1 } }).single('photo');
+const PHOTO_KINDS = { avatar: 'avatar', header: 'header_photo' };
+// Where to go after a photo change: back to the Deliveries page when it was made there.
+const photoBack = (req, notice) => (req.body && req.body.back === 'dashboard' ? '/dashboard' : `/profile?notice=${notice}#look`);
+app.post('/profile/photo', requireUser, (req, res) => {
+  photoUpload(req, res, async (err) => {
+    const fail = (msg) => res.status(400).send(profilePage(req, { error: msg, section: 'look' }));
+    if (err) return fail(err.code === 'LIMIT_FILE_SIZE' ? 'That photo is over 15 MB. Export a smaller JPG and try again.' : 'That upload didn\'t go through. Try again.');
+    const col = PHOTO_KINDS[req.body.kind];
+    if (!col) return fail('Choose which photo this is.');
+    if (!req.file) return fail('Choose a photo first.');
+    const type = logoType(req.file.buffer);
+    if (!type || type === 'svg') return fail('Use a JPG, PNG or WebP photo.');
+    const jpg = await squashPhoto(req.file.buffer, req.body.kind);
+    if (!jpg) return fail('That photo couldn\'t be read. Try a JPG or PNG.');
+    fs.mkdirSync(BRAND, { recursive: true });
+    const name = `${req.user.id}-${req.body.kind}-${token(8)}.jpg`;
+    fs.writeFileSync(path.join(BRAND, name), jpg);
+    dropLogoFile(req.user[col]);
+    db.prepare(`UPDATE users SET ${col} = ? WHERE id = ?`).run(name, req.user.id);
+    res.redirect(photoBack(req, 'photo'));
+  });
+});
+app.post('/profile/photo/remove', requireUser, (req, res) => {
+  const col = PHOTO_KINDS[req.body.kind];
+  if (col) {
+    dropLogoFile(req.user[col]);
+    db.prepare(`UPDATE users SET ${col} = NULL WHERE id = ?`).run(req.user.id);
+  }
+  res.redirect(photoBack(req, 'photo_removed'));
+});
+app.post('/profile/bio', requireUser, (req, res) => {
+  const bio = String(req.body.bio || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+  db.prepare('UPDATE users SET bio = ? WHERE id = ?').run(bio || null, req.user.id);
+  res.redirect('/profile?notice=bio#look');
+});
+
 // Logos are public (they show on delivery pages). Each upload gets a new name, so they cache for good.
 // An SVG opened on its own runs no scripts.
 app.get('/brand/:file', (req, res) => {
   const f = req.params.file;
-  if (!/^\d+-(dark|light)-[\w-]+\.(png|jpg|webp|svg)$/.test(f)) return res.status(404).end();
+  if (!/^\d+-(dark|light|avatar|header)-[\w-]+\.(png|jpg|webp|svg)$/.test(f)) return res.status(404).end();
   res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
   res.set('X-Content-Type-Options', 'nosniff');
   res.sendFile(path.join(BRAND, f), { maxAge: '365d', immutable: true }, (e) => { if (e && !res.headersSent) res.status(404).end(); });
