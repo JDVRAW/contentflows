@@ -487,7 +487,16 @@ const UI_ICON = {
   close: ico('<path d="M6 6l12 12M18 6 6 18"/>'),
   up: ico('<path d="M12 19V5M6 11l6-6 6 6"/>'),
   down: ico('<path d="M12 5v14M6 13l6 6 6-6"/>'),
+  viewGrid: ico('<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>'),
+  viewSmall: ico('<rect x="3.5" y="3.5" width="4.5" height="4.5" rx="1"/><rect x="9.75" y="3.5" width="4.5" height="4.5" rx="1"/><rect x="16" y="3.5" width="4.5" height="4.5" rx="1"/><rect x="3.5" y="9.75" width="4.5" height="4.5" rx="1"/><rect x="9.75" y="9.75" width="4.5" height="4.5" rx="1"/><rect x="16" y="9.75" width="4.5" height="4.5" rx="1"/><rect x="3.5" y="16" width="4.5" height="4.5" rx="1"/><rect x="9.75" y="16" width="4.5" height="4.5" rx="1"/><rect x="16" y="16" width="4.5" height="4.5" rx="1"/>'),
+  viewList: ico('<rect x="3.5" y="5" width="4" height="4" rx="1"/><rect x="3.5" y="15" width="4" height="4" rx="1"/><path d="M11 7h9.5M11 17h9.5"/>'),
 };
+// How the creator sees their files: big thumbnails (the default), small thumbnails, or a list with full names.
+// The choice is kept on this device (see files.js) and set before the files draw, so the page doesn't jump.
+const FILE_VIEWS = [['grid', 'Large thumbnails', 'viewGrid'], ['small', 'Small thumbnails', 'viewSmall'], ['list', 'List', 'viewList']];
+const viewSwitch = () => `<div class="view-switch" role="group" aria-label="Show files as"><span class="muted small">View</span>
+  <span class="view-btns">${FILE_VIEWS.map(([k, label, icon]) => `<button type="button" class="view-btn" data-view="${k}" aria-pressed="${k === 'grid'}" title="${label}" aria-label="${label}">${UI_ICON[icon]}</button>`).join('')}</span></div>`;
+const KIND_LABEL = { image: 'Photo', video: 'Video', audio: 'Audio', file: 'File' };
 // The creator's "Sort" menu for one folder ('' = loose files). Changing it saves right away.
 const sortMenu = (p, g) => `<form method="post" action="/projects/${p.id}/folders/sort" class="folder-sort">
   <input type="hidden" name="folder" value="${esc(g.folder)}">
@@ -559,7 +568,8 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
     </div>
   </section>
 
-  <section id="files" data-base="/projects/${p.id}">
+  <section id="files" data-base="/projects/${p.id}" data-view="grid">
+    <script>try { const v = localStorage.getItem('cf-files-view'); if (['small', 'list'].includes(v)) document.currentScript.parentNode.dataset.view = v; } catch (e) {}</script>
     <div class="files-head">
       <h2>Files <span class="muted">${assets.length}</span></h2>
       <div class="files-tools">
@@ -589,7 +599,7 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
         <button class="ftab" type="button" role="tab" data-tab="__all">All <span>${assets.length}</span></button>
         ${groups.map((g) => `<button class="ftab${!g.folder && !g.items.length ? ' loose-empty' : ''}" type="button" role="tab" data-tab="${esc(g.folder)}" data-folder="${esc(g.folder)}" title="${g.folder ? 'Show only this folder' : 'Files not in a folder'}">${esc(g.label || 'No folder')} <span>${g.items.length}</span></button>`).join('')}
       </div>` : '';
-      return tabs + (sortsUp && groups[0].items.length > 1 ? `<div class="files-sort">${sortMenu(p, groups[0])}</div>` : '') + groups.map((g) => {
+      return `<div class="files-bar">${sortsUp && groups[0].items.length > 1 ? sortMenu(p, groups[0]) : ''}${assets.length ? viewSwitch() : ''}</div>` + tabs + groups.map((g) => {
         const carded = g.folder || anyFolder;
         const shut = carded && collapsed.includes(g.folder);
         const name = esc(g.label || 'No folder');
@@ -631,10 +641,11 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
       <div class="asset" data-id="${a.id}" draggable="true">
         <label class="pick" title="Select"><input type="checkbox" name="ids" value="${a.id}" form="bulk" aria-label="Select ${esc(a.original_name)}"></label>
         <div class="thumb">${a.thumb_name ? `<img loading="lazy" draggable="false" src="/d/${p.share_token}/thumb/${a.id}" alt="">` : `<div class="file-icon">${esc((a.original_name.split('.').pop() || 'file').toUpperCase())}</div>`}
-        ${a.kind === 'video' ? '<span class="badge">▶ Video</span>' : ''}${p.cover_asset_id === a.id ? '<span class="badge left">Cover</span>' : ''}</div>
-        <div class="asset-meta"><span title="${esc(a.original_name)}">${esc(a.original_name)}</span><span class="muted small">${fmtSize(a.size)} · ${a.downloads} dl</span></div>
+        ${a.kind === 'video' ? '<span class="badge">▶<span> Video</span></span>' : ''}${p.cover_asset_id === a.id ? '<span class="badge left">Cover</span>' : ''}</div>
+        <div class="asset-meta"><span class="a-name" title="${esc(a.original_name)}">${esc(a.original_name).replace(/([_.-])/g, '$1<wbr>')}</span><span class="muted small a-sub"><span class="a-ext">${esc(extOf(a).toUpperCase() || KIND_LABEL[a.kind] || 'File')} · </span>${fmtSize(a.size)} · ${a.downloads} dl</span></div>
+        <div class="a-cols"><span class="a-kind">${esc(KIND_LABEL[a.kind] || 'File')}${extOf(a) ? ` <span class="muted">${esc(extOf(a).toUpperCase())}</span>` : ''}</span><span class="a-size">${fmtSize(a.size)}</span><span class="a-dl">${a.downloads} download${a.downloads === 1 ? '' : 's'}</span><span class="a-date muted">${fmtDate(a.created_at)}</span></div>
         <div class="asset-actions">
-          ${g.sort === 'custom' && g.items.length > 1 ? `<span class="nudge">${['up', 'down'].map((d) => `<form method="post" action="/projects/${p.id}/assets/${a.id}/nudge"><input type="hidden" name="dir" value="${d}"><button class="order-btn" title="Move ${d === 'up' ? 'earlier' : 'later'}" aria-label="Move ${esc(a.original_name)} ${d === 'up' ? 'earlier' : 'later'}"${(d === 'up' ? i === 0 : i === g.items.length - 1) ? ' disabled' : ''}>${d === 'up' ? '←' : '→'}</button></form>`).join('')}</span>` : ''}
+          ${g.sort === 'custom' && g.items.length > 1 ? `<span class="nudge">${['up', 'down'].map((d) => `<form method="post" action="/projects/${p.id}/assets/${a.id}/nudge"><input type="hidden" name="dir" value="${d}"><button class="order-btn" title="Move ${d === 'up' ? 'earlier' : 'later'}" aria-label="Move ${esc(a.original_name)} ${d === 'up' ? 'earlier' : 'later'}"${(d === 'up' ? i === 0 : i === g.items.length - 1) ? ' disabled' : ''}><span class="h">${d === 'up' ? '←' : '→'}</span><span class="v">${d === 'up' ? '↑' : '↓'}</span></button></form>`).join('')}</span>` : ''}
           ${a.thumb_name || a.kind === 'video' ? `<form method="post" action="/projects/${p.id}/cover/${a.id}"><button class="link small">Set cover</button></form>` : ''}
           <form method="post" action="/projects/${p.id}/assets/${a.id}/delete" onsubmit="return confirm('Delete this file?')"><button class="link small danger">Delete</button></form>
         </div>
