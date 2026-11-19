@@ -304,7 +304,10 @@ body.has-nav .wrap { padding-top: 112px; }
 @media (prefers-reduced-motion: reduce) { .pc-grid i { transition: none; } }
 
 
-.reveal-on .reveal { opacity: 0; transform: translateY(24px); transition: opacity .9s cubic-bezier(.16, 1, .3, 1) var(--rd, 0ms), transform .9s cubic-bezier(.16, 1, .3, 1) var(--rd, 0ms); }
+.reveal-on .reveal { opacity: 0; transform: translateY(var(--ry, 48px)); transition: opacity 1s cubic-bezier(.22, 1, .36, 1) var(--rd, 0ms), transform 1s cubic-bezier(.22, 1, .36, 1) var(--rd, 0ms); }
+/* Fora's entrance offsets: headings travel furthest, labels least. */
+.reveal-on .lp-heading.reveal, .reveal-on .lp-statement.reveal { --ry: 72px; }
+.reveal-on .lp-label.reveal { --ry: 36px; }
 .reveal-on .reveal.in { opacity: 1; transform: none; }
 
 @media (max-width: 900px) {
@@ -1443,3 +1446,7 @@ dialog.vault-picker[open] { display: flex; }
   .scene-mock { border-radius: 10px; }
   .scene-far { height: 46%; } .scene-near { height: 36%; } .scene-fore { height: 22%; }
 }
+
+/* Intro text: words light up with scroll (landing.js 2c). */
+.words-on .w { opacity: .16; transition: opacity .25s linear; }
+[data-speed] { will-change: translate; }
