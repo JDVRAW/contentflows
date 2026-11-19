@@ -1241,3 +1241,28 @@ dialog.vault-picker[open] { display: flex; }
 .vault-picker .vp-progress .st-done { color: #4fbf7f; } .vault-picker .vp-progress .st-failed { color: var(--accent); }
 .vault-picker .vp-progress .vp-err { color: var(--accent); font-size: 13px; margin: -2px 0 4px; }
 @media (max-width: 600px) { .vault-picker .vp-thumb { width: 44px; height: 30px; } .vault-picker .vp-foot { flex-direction: column; align-items: stretch; } }
+
+/* "New" tag and the dashboard card that tells creators about Add from Vault. */
+.new-pill { display: inline-block; font: 600 10px/1 var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--accent-ink);
+  background: var(--accent); padding: 4px 7px 3px; border-radius: 999px; vertical-align: 1px; }
+.vault-promo { position: relative; display: grid; grid-template-columns: 56px 1fr; gap: 20px; align-items: start; margin-bottom: 28px;
+  padding: 22px 56px 22px 22px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: radial-gradient(120% 140% at 0% 0%, rgba(229,64,42,.13), transparent 55%), var(--surface); }
+.vault-promo .vp-mark { width: 56px; height: 56px; padding: 13px; border-radius: 16px; background: var(--surface-2); border: 1px solid var(--line); }
+.vault-promo .vp-mark .cf-symbol { color: var(--text); }
+.vault-promo .vp-eyebrow { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.vault-promo h2 { margin: 0 0 6px; font: 500 21px/1.25 var(--sans); letter-spacing: -.01em; }
+.vault-promo p.muted { margin: 0; max-width: 620px; }
+.vault-promo p.muted b { color: var(--text); font-weight: 500; }
+.vault-promo .vp-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+.vault-promo .vp-close { position: absolute; top: 12px; right: 12px; margin: 0; }
+.vault-promo .vp-x { width: 32px; height: 32px; border-radius: 999px; border: 1px solid transparent; background: transparent; color: var(--muted);
+  font: 400 22px/1 var(--sans); cursor: pointer; }
+.vault-promo .vp-x:hover { color: var(--text); border-color: var(--line); }
+.vault-open-row .new-pill { margin-right: 2px; }
+@media (max-width: 600px) {
+  .vault-promo { grid-template-columns: 1fr; gap: 14px; padding: 18px 48px 18px 18px; }
+  .vault-promo .vp-mark { width: 44px; height: 44px; padding: 10px; border-radius: 13px; }
+  .vault-promo h2 { font-size: 19px; }
+  .vault-promo .vp-actions .btn { flex: 1 1 auto; }
+}

@@ -113,7 +113,9 @@ for (const [name, type] of [['plan', "TEXT NOT NULL DEFAULT 'free'"], ['plan_int
   ['logo_dark', 'TEXT'], ['logo_light', 'TEXT'],
   // The creator's own Vault (their storage platform), connected under Connect: its address, a read-only
   // access key made in the Vault, and the Vault account it opens (shown so they know which one).
-  ['vault_url', 'TEXT'], ['vault_key', 'TEXT'], ['vault_email', 'TEXT']]) {
+  ['vault_url', 'TEXT'], ['vault_key', 'TEXT'], ['vault_email', 'TEXT'],
+  // Set when the creator closes the "New: Add from Vault" card on their dashboard, so it stays closed.
+  ['vault_promo_hidden', 'INTEGER']]) {
   if (!userCols.has(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
 }
 

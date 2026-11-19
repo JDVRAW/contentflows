@@ -238,7 +238,15 @@ app.get('/dashboard', requireUser, (req, res) => {
       ) AS cover_id
     FROM projects p WHERE p.user_id = ? ORDER BY p.created_at DESC, p.id DESC`).all(req.user.id)
     .map((p) => ({ ...p, cover_thumb: !!p.cover_id }));
-  res.send(V.dashboard({ user: req.user, projects, usage: usage(req.user) }));
+  res.send(V.dashboard({ user: req.user, projects, usage: usage(req.user),
+    vaultPromo: !vault.connected(req.user) && !req.user.vault_promo_hidden }));
+});
+
+// Closes the "New: Add from Vault" card on the dashboard for good.
+app.post('/vault-promo/hide', requireUser, (req, res) => {
+  db.prepare('UPDATE users SET vault_promo_hidden = 1 WHERE id = ?').run(req.user.id);
+  if (req.get('accept') === 'application/json') return res.json({ ok: true });
+  res.redirect('/dashboard');
 });
 
 const TYPES = Object.keys(V.TYPES);
