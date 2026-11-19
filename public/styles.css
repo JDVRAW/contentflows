@@ -1386,11 +1386,9 @@ dialog.vault-picker[open] { display: flex; }
 }
 
 /* Vault logo: stacked layers and the "vault contentflows." wordmark. Inherits the text colour. */
-.vault-logo { display: inline-flex; align-items: center; gap: .32em; height: 100%; color: currentColor; white-space: nowrap; }
-.vault-mark { height: 1.05em; width: auto; flex: none; }
+.vault-logo { display: inline-flex; align-items: center; gap: .42em; height: 100%; color: currentColor; white-space: nowrap; }
+.vault-mark { height: 1.1em; width: auto; flex: none; }
 .vault-word { font: 600 1em/1 var(--geist), var(--sans); letter-spacing: -.035em; }
-.vault-word b { font-weight: 600; color: #E5402A; }
-.vault-word i { font-style: normal; color: #E5402A; }
 
 /* (04) New: the two products side by side, above the cards. */
 .new-brands { display: grid; grid-template-columns: 1fr auto 1fr; align-items: stretch; gap: 18px; margin-top: clamp(36px, 4vw, 56px); }

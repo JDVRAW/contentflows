@@ -13,11 +13,15 @@ const LOGO = fs.readFileSync(path.join(__dirname, '..', 'public', 'brand', 'cont
 
 // The Vault's mark in ContentFlows' language: three stacked layers (the Vault keeps everything), the top
 // one in ContentFlows red. Paired with a "vault contentflows." wordmark set in Geist, like the domain.
-const VAULT_MARK = `<svg class="vault-mark" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
-  <rect x="6" y="40" width="52" height="16" rx="6" fill="currentColor" opacity=".45"/>
-  <rect x="6" y="24" width="52" height="16" rx="6" fill="currentColor" opacity=".75"/>
-  <rect x="6" y="8" width="52" height="16" rx="6" fill="#E5402A"/></svg>`;
-const VAULT_LOGO = `<span class="vault-logo">${VAULT_MARK}<span class="vault-word"><b>vault</b>contentflows<i>.</i></span></span>`;
+// Official Vault Me mark (jdvraw/storage-platform src/components/Logo.tsx): four squircle "vault doors",
+// three in the text colour at falling opacity and the fourth ContentFlows red with a keyhole.
+const VAULT_MARK = `<svg class="vault-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+  <rect x="1.5" y="1.5" width="9.5" height="9.5" rx="2.6" fill="currentColor"/>
+  <rect x="13" y="1.5" width="9.5" height="9.5" rx="2.6" fill="currentColor" opacity=".55"/>
+  <rect x="1.5" y="13" width="9.5" height="9.5" rx="2.6" fill="currentColor" opacity=".3"/>
+  <rect x="13" y="13" width="9.5" height="9.5" rx="2.6" fill="#E5402A"/>
+  <circle cx="17.75" cy="16.9" r="1.35" fill="#111113"/><path d="M17.1 17.6h1.3l.35 2.2h-2z" fill="#111113"/></svg>`;
+const VAULT_LOGO = `<span class="vault-logo">${VAULT_MARK}<span class="vault-word">Vault Me</span></span>`;
 
 // The four-square symbol as separate shapes so each one can be animated.
 const SYMBOL = (cls = '') => `<svg class="cf-symbol ${cls}" viewBox="5 5 54 54" aria-hidden="true" focusable="false">
@@ -417,7 +421,7 @@ ${homePricing()}
     <div class="end-rule"></div>
     <nav class="end-links" aria-label="Footer"><a href="/signup">Sign up</a><a href="/login">Log in</a><a href="#why">Why us</a><a href="#how">How it works</a><a href="#new">AI and Vault</a><a href="#pricing">Pricing</a></nav>
   </div>
-  <div class="end-foot"><a class="foot-logo" href="/" aria-label="ContentFlows home">${LOGO}</a><a class="foot-vault" href="${VAULT_SITE}" target="_blank" rel="noopener" aria-label="Vault ContentFlows">${VAULT_LOGO}</a><span class="fs-mono">Final work delivery for creatives</span></div>
+  <div class="end-foot"><a class="foot-logo" href="/" aria-label="ContentFlows home">${LOGO}</a><a class="foot-vault" href="${VAULT_SITE}" target="_blank" rel="noopener" aria-label="Vault Me">${VAULT_LOGO}</a><span class="fs-mono">Final work delivery for creatives</span></div>
 </footer>` });
 }
 
