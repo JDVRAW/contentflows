@@ -201,7 +201,7 @@ function homePricing() {
   return `<section class="lp lp-dark" data-header-theme="light" id="pricing">
   <div class="lp-inner price-split">
     <div class="price-copy reveal">
-      <p class="lp-label">(04) Pricing</p>
+      <p class="lp-label">(05) Pricing</p>
       <h2 class="lp-heading">Start free. Upgrade when your work outgrows it.</h2>
       <p class="lp-body">Every studio starts with ${planSize(free.limit)} free. Pro and Studio give you room to keep every shoot and every cut online for your clients. Pro and Studio also put your own logo on every delivery.</p>
       <ul class="check-list">
@@ -329,17 +329,54 @@ function landing() {
   </div>
 </section>
 
+<section class="lp lp-dark lp-new" data-header-theme="light" id="new">
+  <div class="lp-inner">
+    <p class="lp-label reveal">(04) New in ContentFlows</p>
+    <h2 class="lp-heading reveal">Less busywork. <span>More time behind the camera.</span></h2>
+  </div>
+  <div class="lp-inner new-grid">
+    <article class="new-card reveal" id="connect-ai">
+      <div class="nv nv-ai" aria-hidden="true">
+        <div class="nva-msg you">Create a photoshoot delivery for Ana López, add the photos from this Dropbox link and send me the link.</div>
+        <div class="nva-msg ai">
+          <span class="nva-tool">${SYMBOL()}<em>ContentFlows</em><b>3 actions</b></span>
+          <p>Done. 48 photos added to <b>Ana López — Editorial</b>.</p>
+          <span class="nva-link">contentflows.app/d/ana-lopez</span>
+        </div>
+      </div>
+      <span class="pillar-num"><span class="new-pill">New</span> Connect AI</span>
+      <h3>Just ask your AI assistant.</h3>
+      <p>Connect ContentFlows to Claude, ChatGPT or Cursor. Create deliveries, add files from links, set passwords and expiry dates, and see who downloaded, all by asking.</p>
+      <a class="fs-cta new-cta" href="/signup">Connect your AI</a>
+    </article>
+    <article class="new-card reveal" id="vault">
+      <div class="nv nv-vault" aria-hidden="true">
+        <div class="nvv-head"><em>Add from Vault</em><span>Vault / 2026 / Golden Hour</span></div>
+        <div class="nvv-row on"><i></i><span>hero_cut_4K.mov</span><b>8.4 GB</b></div>
+        <div class="nvv-row on"><i></i><span>campaign_031.tif</span><b>248.6 MB</b></div>
+        <div class="nvv-row"><i></i><span>bts_selects.zip</span><b>2.1 GB</b></div>
+        <div class="nvv-row on"><i></i><span>poster_final.jpg</span><b>18.2 MB</b></div>
+        <div class="nvv-foot"><span>3 files · server to server</span><b>Add files</b></div>
+      </div>
+      <span class="pillar-num"><span class="new-pill">New</span> ContentFlows Vault</span>
+      <h3>Your archive, one click from every delivery.</h3>
+      <p>Keep every shoot in your Vault and pull the finals into any delivery. Files copy at full quality, server to server, so big videos never go through your computer.</p>
+      <a class="fs-cta new-cta ghost" href="${VAULT_SITE}" target="_blank" rel="noopener">Explore the Vault</a>
+    </article>
+  </div>
+</section>
+
 ${homePricing()}
 
 <section class="arch" aria-hidden="true"><div class="arch-layer"><img src="/static/arch.jpg" alt="" decoding="async"></div></section>
 <footer class="end" data-header-theme="light">
   <div class="end-inner">
-    <p class="lp-label">(05) Start delivering</p>
+    <p class="lp-label">(06) Start delivering</p>
     <h2 class="end-title">Deliver your next project<br><span>the way it deserves.</span></h2>
     <p class="end-sub">Create your studio in under a minute. Send your first delivery today.</p>
     <a class="fs-cta" href="/signup">Start delivering</a>
     <div class="end-rule"></div>
-    <nav class="end-links" aria-label="Footer"><a href="/signup">Sign up</a><a href="/login">Log in</a><a href="#why">Why us</a><a href="#how">How it works</a><a href="#pricing">Pricing</a></nav>
+    <nav class="end-links" aria-label="Footer"><a href="/signup">Sign up</a><a href="/login">Log in</a><a href="#why">Why us</a><a href="#how">How it works</a><a href="#new">AI and Vault</a><a href="#pricing">Pricing</a></nav>
   </div>
   <div class="end-foot"><a class="foot-logo" href="/" aria-label="ContentFlows home">${LOGO}</a><span class="fs-mono">Final work delivery for creatives</span></div>
 </footer>` });

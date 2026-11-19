@@ -1340,3 +1340,44 @@ dialog.vault-picker[open] { display: flex; }
 .look-slot .row { display: flex; gap: 8px; margin-top: 10px; }
 .look-slot form { margin: 0; }
 @media (max-width: 640px) { .look-slots { grid-template-columns: 1fr; } }
+
+/* Home page: (04) New in ContentFlows. Connect AI and the Vault, each with a small product picture. */
+.lp-new .lp-heading { max-width: 760px; }
+.lp-new .lp-heading span { color: var(--lp-muted); }
+.lp-new + .lp-dark { border-top: 1px solid rgba(255,255,255,.08); }
+.new-grid { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(28px, 4vw, 56px); margin-top: clamp(40px, 5vw, 72px); }
+.new-card { display: flex; flex-direction: column; align-items: flex-start; scroll-margin-top: 110px; }
+.new-card .pillar-num { display: inline-flex; align-items: center; gap: 10px; }
+.new-card h3 { font: 400 clamp(24px, 2.2vw, 30px)/1.15 var(--geist); letter-spacing: -.015em; margin: 14px 0 10px; color: var(--lp-fg); }
+.new-card p { font: 400 15px/1.55 var(--geist); color: var(--lp-muted); margin: 0 0 24px; max-width: 520px; }
+.new-cta.ghost { background: transparent; color: var(--lp-fg); border: 1px solid rgba(255,255,255,.25); }
+.new-cta.ghost:hover { background: rgba(255,255,255,.06); }
+.nv { width: 100%; aspect-ratio: 16 / 10.5; margin-bottom: 28px; border-radius: 14px; border: 1px solid rgba(255,255,255,.08); overflow: hidden;
+  background: radial-gradient(90% 80% at 100% 0%, rgba(229,64,42,.16), transparent 60%), #19191c; padding: clamp(18px, 2.4vw, 30px);
+  display: flex; flex-direction: column; gap: 14px; box-shadow: 0 40px 80px -40px rgba(0,0,0,.8); }
+/* Connect AI: a short chat. */
+.nv-ai { justify-content: center; }
+.nva-msg { font: 400 14px/1.5 var(--geist); border-radius: 14px; padding: 12px 15px; max-width: 86%; }
+.nva-msg.you { align-self: flex-end; background: #2a2a30; color: #f1efe9; border-bottom-right-radius: 4px; }
+.nva-msg.ai { align-self: flex-start; background: #e6e1cb; color: #111113; border-bottom-left-radius: 4px; display: grid; gap: 8px; }
+.nva-msg.ai p { margin: 0; color: #111113; font-size: 14px; }
+.nva-tool { display: flex; align-items: center; gap: 8px; font: 400 10px var(--mono); text-transform: uppercase; color: #615E55; }
+.nva-tool .cf-symbol { width: 14px; height: 14px; color: #111113; }
+.nva-tool em { font-style: normal; color: #111113; } .nva-tool b { font-weight: 400; margin-left: auto; }
+.nva-link { font: 400 12px var(--mono); color: #C23320; background: rgba(229,64,42,.1); padding: 7px 10px; border-radius: 6px; justify-self: start; }
+/* Vault: the Add from Vault picker. */
+.nvv-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,.08); }
+.nvv-head em { font: normal 500 15px var(--geist); color: #f1efe9; } .nvv-head span { font: 400 11px var(--mono); color: #8d8a82; }
+.nvv-row { display: grid; grid-template-columns: 16px 1fr auto; gap: 12px; align-items: center; font: 400 13px var(--geist); color: #c9c6be; }
+.nvv-row i { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid #4a4a52; position: relative; }
+.nvv-row.on i { background: #E5402A; border-color: #E5402A; }
+.nvv-row.on i::after { content: ''; position: absolute; left: 4px; top: 2px; width: 4px; height: 8px; border: solid #fff; border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+.nvv-row b { font: 400 11px var(--mono); color: #8d8a82; }
+.nvv-foot { margin-top: auto; display: flex; justify-content: space-between; align-items: center; gap: 10px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.08); }
+.nvv-foot span { font: 400 11px var(--mono); color: #8d8a82; text-transform: uppercase; }
+.nvv-foot b { font: 500 11px var(--mono); text-transform: uppercase; background: var(--action); color: #fff; padding: 9px 14px; border-radius: 4px; }
+@media (max-width: 860px) {
+  .new-grid { grid-template-columns: 1fr; gap: 64px; }
+  .nv { aspect-ratio: auto; min-height: 260px; }
+  .nva-msg { font-size: 13px; max-width: 92%; }
+}
