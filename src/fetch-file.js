@@ -8,6 +8,7 @@ const dns = require('dns');
 const fs = require('fs');
 const net = require('net');
 const path = require('path');
+const { PassThrough } = require('stream');
 
 // Two lists, one per family. Node's BlockList matches an IPv4 address against IPv4-mapped IPv6
 // rules (::ffff:0:0/96), so mixing them in one list made every IPv4 address look private.
@@ -58,9 +59,13 @@ function nameFrom(res, url) {
 
 // Resolves to { size, name, type }. maxBytes(contentLength) returns the most bytes this file may
 // have; going over it stops the download with err.code 'ETOOBIG'.
+// dest is a file path, or a function (stream, { declared, max, type, name }) returning a promise
+// that reads the stream to its end (to send it straight on to object storage without touching this
+// server's disk). If the download fails partway, the stream errors so the function can clean up.
+// timeoutMs stops a download that sends nothing for that long; totalMs caps the whole download.
 // headers: extra request headers (such as a Vault access key). They are only sent to the link's own
 // site: a redirect to another site drops them.
-function download(raw, dest, { maxBytes, timeoutMs = 10 * 60 * 1000, redirects = 5, headers = {} } = {}) {
+function download(raw, dest, { maxBytes, timeoutMs = 2 * 60 * 1000, totalMs = 4 * 3600 * 1000, redirects = 5, headers = {} } = {}) {
   let url;
   try { url = new URL(directLink(raw)); } catch (e) { return Promise.reject(Object.assign(new Error('That is not a valid link.'), { code: 'EBADURL' })); }
   if (!['http:', 'https:'].includes(url.protocol))
@@ -78,7 +83,7 @@ function download(raw, dest, { maxBytes, timeoutMs = 10 * 60 * 1000, redirects =
         res.resume();
         if (!redirects) return reject(Object.assign(new Error('That link redirects too many times.'), { code: 'EREDIRECT' }));
         const next = new URL(res.headers.location, url);
-        return resolve(download(next.toString(), dest, { maxBytes, timeoutMs, redirects: redirects - 1, headers: next.origin === url.origin ? headers : {} }));
+        return resolve(download(next.toString(), dest, { maxBytes, timeoutMs, totalMs, redirects: redirects - 1, headers: next.origin === url.origin ? headers : {} }));
       }
       if (res.statusCode !== 200) {
         res.resume();
@@ -95,20 +100,38 @@ function download(raw, dest, { maxBytes, timeoutMs = 10 * 60 * 1000, redirects =
         res.resume();
         return reject(Object.assign(new Error('The file is too big.'), { code: 'ETOOBIG', size: declared }));
       }
-      let size = 0, failed = null;
-      const out = fs.createWriteStream(dest, { flags: 'wx' });
-      let timer;
-      const fail = (e) => { if (failed) return; failed = e; clearTimeout(timer); res.destroy(); out.destroy(); fs.rm(dest, { force: true }, () => reject(e)); };
-      timer = setTimeout(() => fail(Object.assign(new Error('The download took too long.'), { code: 'ETIMEDOUT' })), timeoutMs);
+      let size = 0, failed = null, idle, total;
+      const name = nameFrom(res, url.toString());
+      const toSink = typeof dest === 'function';
+      const out = toSink ? new PassThrough() : fs.createWriteStream(dest, { flags: 'wx' });
+      const stop = () => { clearTimeout(idle); clearTimeout(total); };
+      const fail = (e) => {
+        if (failed) return;
+        failed = e; stop(); res.destroy(); out.destroy(toSink ? e : undefined);
+        if (toSink) reject(e); else fs.rm(dest, { force: true }, () => reject(e));
+      };
+      const tooSlow = () => fail(Object.assign(new Error('The download stalled.'), { code: 'ETIMEDOUT' }));
+      idle = setTimeout(tooSlow, timeoutMs);
+      total = setTimeout(() => fail(Object.assign(new Error('The download took too long.'), { code: 'ETIMEDOUT' })), totalMs);
       res.on('data', (chunk) => {
         size += chunk.length;
+        idle.refresh();
         if (size > max) fail(Object.assign(new Error('The file is too big.'), { code: 'ETOOBIG', size }));
       });
       res.on('error', fail);
-      out.on('error', fail);
-      out.on('finish', () => { clearTimeout(timer); if (!failed) resolve({ size, type: type || null, name: nameFrom(res, url.toString()) }); });
+      out.on('error', (e) => { if (!toSink) fail(e); });
       res.on('aborted', () => fail(new Error('The download was cut off.')));
       res.pipe(out);
+      const done = () => { stop(); if (!failed) resolve({ size, type: type || null, name }); };
+      if (!toSink) return out.on('finish', done);
+      const declaredSize = Number.isFinite(declared) ? declared : 0;
+      // The response can end early without an error when the connection drops.
+      Promise.resolve().then(() => dest(out, { declared: declaredSize, max, type: type || null, name }))
+        .then(() => {
+          if (failed) return;
+          if (declaredSize && size !== declaredSize) return fail(new Error('The download was cut off.'));
+          done();
+        }, fail);
     });
     req.on('timeout', () => req.destroy(Object.assign(new Error('The link did not answer in time.'), { code: 'ETIMEDOUT' })));
     req.on('error', reject);
