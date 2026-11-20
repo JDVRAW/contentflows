@@ -25,16 +25,39 @@ const reason = (err, stderr) => (String(stderr || '').trim().split('\n').pop() |
 const THUMB_SLOTS = Math.max(1, Number(process.env.THUMB_CONCURRENCY) || 2);
 let busy = 0;
 const waiting = [];
-function makeThumb(srcPath, kind, id) {
-  if (kind !== 'image' && kind !== 'video') return Promise.resolve(null);
+function inSlot(job) {
   return new Promise((resolve) => {
     const run = () => {
       busy++;
-      runThumb(srcPath, kind, id).then(resolve, (e) => { console.error(`thumbnail failed for asset ${id}: ${e.message}`); resolve(null); })
+      job().then(resolve, (e) => { console.error(e.message); resolve(null); })
         .finally(() => { busy--; if (waiting.length) waiting.shift()(); });
     };
     busy < THUMB_SLOTS ? run() : waiting.push(run);
   });
+}
+function makeThumb(srcPath, kind, id) {
+  if (kind !== 'image' && kind !== 'video') return Promise.resolve(null);
+  return inSlot(() => runThumb(srcPath, kind, id).catch((e) => { throw new Error(`thumbnail failed for asset ${id}: ${e.message}`); }));
+}
+
+// A screen-sized JPEG of a photo (longest side 2560 px) for the client gallery's big view and cover.
+// Photographers deliver huge originals (a 50 MB PNG or TIFF is normal); showing those in the browser
+// means downloading every one in full just to look at it. The original stays untouched for downloads.
+// Resolves to the file name in DATA_DIR/thumbs, or null when ffmpeg fails.
+const VIEW_EDGE = 2560;
+function makeView(srcPath, id) {
+  return inSlot(() => new Promise((resolve) => {
+    const out = `${id}-v.jpg`;
+    const outPath = path.join(DATA_DIR, 'thumbs', out);
+    const fit = `scale='if(gte(iw,ih),min(${VIEW_EDGE},iw),-2)':'if(gte(iw,ih),-2,min(${VIEW_EDGE},ih))'`;
+    const args = ['-y', '-loglevel', 'error', '-i', srcPath, '-frames:v', '1', '-vf', fit, '-q:v', '3', outPath];
+    execFile(process.env.FFMPEG_PATH || 'ffmpeg', args, { timeout: /^https?:/.test(srcPath) ? 180000 : 90000 }, (err, so, stderr) => {
+      if (!err && fs.existsSync(outPath)) return resolve(out);
+      console.error(`view image failed for asset ${id}: ${reason(err || {}, stderr)}`);
+      fs.rm(outPath, { force: true }, () => {});
+      resolve(null);
+    });
+  }));
 }
 
 function runThumb(srcPath, kind, id) {
@@ -111,4 +134,4 @@ function squashPhoto(buf, mode) {
   });
 }
 
-module.exports = { kindOf, makeThumb, thumbRatio, squashPhoto };
+module.exports = { kindOf, makeThumb, makeView, thumbRatio, squashPhoto };

@@ -70,6 +70,11 @@ if (!db.prepare('PRAGMA table_info(assets)').all().some((c) => c.name === 'stora
 if (!db.prepare('PRAGMA table_info(assets)').all().some((c) => c.name === 'folder'))
   db.exec('ALTER TABLE assets ADD COLUMN folder TEXT');
 
+// A screen-sized JPEG of a photo for the client gallery (src/media.js makeView): a file name in
+// DATA_DIR/thumbs for files on disk, or a bucket key ("views/<id>.jpg") for files in object storage.
+if (!db.prepare('PRAGMA table_info(assets)').all().some((c) => c.name === 'view_name'))
+  db.exec('ALTER TABLE assets ADD COLUMN view_name TEXT');
+
 // Folders a creator made by hand on the project page. A folder with files in it also shows
 // without a row here (it comes from the files' own folder); this keeps empty ones around.
 db.exec(`

@@ -51,6 +51,12 @@ async function completeUpload(Key, UploadId, parts) {
   return head.ContentLength;
 }
 
+// One part of a multipart upload, streamed straight from a request (Body) of a known length.
+async function putPart(Key, UploadId, PartNumber, Body, ContentLength) {
+  const r = await client.send(new UploadPartCommand({ Bucket, Key, UploadId, PartNumber, ContentLength, Body }));
+  return r.ETag;
+}
+
 const abortUpload = (Key, UploadId) => client.send(new AbortMultipartUploadCommand({ Bucket, Key, UploadId })).catch(() => {});
 
 // Upload a file from this server's disk (files an assistant adds by link land here first).
@@ -104,4 +110,4 @@ const remove = (Key) => client.send(new DeleteObjectCommand({ Bucket, Key })).ca
 // Some S3 variables set but not all: almost always a setup slip worth pointing out.
 const partlySet = missing.length > 0 && missing.length < REQUIRED.length ? missing : null;
 
-module.exports = { enabled, describe, partlySet, partSizeFor, startUpload, signParts, completeUpload, abortUpload, signedGet, getRange, getStream, remove, disposition, putFile };
+module.exports = { enabled, describe, partlySet, partSizeFor, startUpload, signParts, completeUpload, abortUpload, putPart, signedGet, getRange, getStream, remove, disposition, putFile };
