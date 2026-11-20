@@ -1416,7 +1416,7 @@ app.get('/brand/:file', (req, res) => {
   res.sendFile(path.join(BRAND, f), { maxAge: '365d', immutable: true }, (e) => { if (e && !res.headersSent) res.status(404).end(); });
 });
 
-const importFile = makeImporter({ db, token, storage, kindOf, makeThumb, queueView, insertAsset, spaceProblem, spaceLeft, reserved, MAX_UPLOAD, UPLOADS, fmtSize: V.fmtSize });
+const importFile = makeImporter({ db, token, storage, kindOf, makeThumb, queueView, insertAsset, spaceProblem, spaceLeft, reserved, MAX_UPLOAD, UPLOADS, fmtSize: V.fmtSize, storeFromBucket });
 
 app.use('/mcp', mcpRouter({
   db, token, TYPES: V.TYPES, deleteDelivery, removeAssetFiles, importFile, usage, originOf, fmtSize: V.fmtSize, userView: billing.view,
