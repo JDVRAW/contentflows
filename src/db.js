@@ -75,6 +75,19 @@ if (!db.prepare('PRAGMA table_info(assets)').all().some((c) => c.name === 'folde
 if (!db.prepare('PRAGMA table_info(assets)').all().some((c) => c.name === 'view_name'))
   db.exec('ALTER TABLE assets ADD COLUMN view_name TEXT');
 
+// Upload links for AI assistants (server.js), kept here so a restart or redeploy doesn't void them.
+// files: JSON list of [file key, state] for files partway into a multipart upload in the bucket.
+db.exec(`
+CREATE TABLE IF NOT EXISTS upload_links (
+  token TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  project_id INTEGER NOT NULL,
+  folder TEXT,
+  until INTEGER NOT NULL,
+  files TEXT
+);
+`);
+
 // Folders a creator made by hand on the project page. A folder with files in it also shows
 // without a row here (it comes from the files' own folder); this keeps empty ones around.
 db.exec(`

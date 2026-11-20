@@ -692,12 +692,17 @@ app.post('/projects/:id/upload', requireUser, ownProject, checkSpace, upload.arr
 // Claude Code…) sends every file of a folder on that computer to it, each with
 // `curl -T <file> "<link>?name=<file name>"` (and &dir=<subfolder> to keep subfolders), so photos and
 // videos go from the computer straight into the delivery without being shared anywhere first.
-// A link takes any number of files for 24 hours, and is kept in memory: a restart voids it.
+// A link takes any number of files for 24 hours. Links live in the database (upload_links), so they
+// survive a restart; so does a file partway into the bucket (its multipart upload id and the parts
+// that arrived), and the next part picks up where it left off. Without a bucket, a half-sent file
+// on disk is removed on restart (sweepUnfinishedUploads) and starts again from part 1.
 const UPLOAD_LINK_HOURS = 24;
 const uploadLinks = new Map(); // token -> { userId, projectId, folder, until, files: Map(file key -> { partial, busy }) }
 function makeUploadLink(user, p, { folder }) {
   const t = token(24);
-  uploadLinks.set(t, { userId: user.id, projectId: p.id, folder: folder || null, until: Date.now() + UPLOAD_LINK_HOURS * 3600e3, files: new Map() });
+  const link = { userId: user.id, projectId: p.id, folder: folder || null, until: Date.now() + UPLOAD_LINK_HOURS * 3600e3, files: new Map() };
+  uploadLinks.set(t, link);
+  saveLink(t, link);
   return { token: t, expires_at: new Date(Date.now() + UPLOAD_LINK_HOURS * 3600e3).toISOString() };
 }
 // Types for files sent without one (curl -T sends none), so videos and photos still play in the browser.
@@ -720,18 +725,41 @@ function dropParts(slot) {
   slot.partial = null;
 }
 const dropLink = (link) => { for (const slot of link.files.values()) dropParts(slot); link.files.clear(); };
+const saveLinkRow = db.prepare('INSERT OR REPLACE INTO upload_links (token, user_id, project_id, folder, until, files) VALUES (?, ?, ?, ?, ?, ?)');
+function saveLink(t, l) {
+  const files = [...l.files].filter(([, slot]) => slot.partial && slot.partial.uploadId).map(([k, slot]) => [k, slot.partial]);
+  saveLinkRow.run(t, l.userId, l.projectId, l.folder, l.until, JSON.stringify(files));
+}
+const forgetLink = (t) => db.prepare('DELETE FROM upload_links WHERE token = ?').run(t);
+function endLink(t, l) { dropLink(l); uploadLinks.delete(t); forgetLink(t); }
+// Links from before the last restart. Expired ones give back their half-sent bucket uploads.
+for (const r of db.prepare('SELECT * FROM upload_links').all()) {
+  let files = [];
+  try { files = JSON.parse(r.files || '[]'); } catch (e) { /* keep the link, lose the half-sent files */ }
+  const l = { userId: r.user_id, projectId: r.project_id, folder: r.folder, until: r.until,
+    files: new Map(files.filter(([, st]) => st && st.uploadId && storage.enabled).map(([k, partial]) => [k, { partial, busy: false }])) };
+  if (l.until < Date.now()) endLink(r.token, l); else uploadLinks.set(r.token, l);
+}
 // The minimum size of every part but the last in a bucket multipart upload.
 const BUCKET_PART_MIN = 5 * 1024 * 1024;
-setInterval(() => { const now = Date.now(); for (const [t, l] of uploadLinks) if (l.until < now) { dropLink(l); uploadLinks.delete(t); } }, 3600e3).unref();
+setInterval(() => { const now = Date.now(); for (const [t, l] of uploadLinks) if (l.until < now) endLink(t, l); }, 3600e3).unref();
 
 async function receiveUpload(req, res) {
   const t = req.params.t;
   const link = uploadLinks.get(t);
-  const answer = (status, body) => { req.resume(); res.status(status).json(body); };
+  // Answers only once the whole body has been read: answering early and closing makes curl stop
+  // with "Failed sending data to the peer" (exit 55) even when the answer is ok.
+  const answer = (status, body) => {
+    const send = () => { if (!res.headersSent) res.status(status).json(body); };
+    if (req.complete || req.readableEnded) return send();
+    req.on('end', send);
+    req.on('error', () => {});
+    req.resume();
+  };
   if (!link || link.until < Date.now()) return answer(404, { ok: false, error: 'This upload link is unknown, used or expired. Ask for a new one.' });
   const p = db.prepare('SELECT * FROM projects WHERE id = ?').get(link.projectId);
   const row = p && db.prepare('SELECT * FROM users WHERE id = ? AND id = ?').get(link.userId, p.user_id);
-  if (!row) { dropLink(link); uploadLinks.delete(t); return answer(404, { ok: false, error: 'The delivery for this link was deleted.' }); }
+  if (!row) { endLink(t, link); return answer(404, { ok: false, error: 'The delivery for this link was deleted.' }); }
   const user = billing.view(row);
   const max = Math.min(MAX_UPLOAD, spaceLeft(user));
   const declared = Number(req.headers['content-length']);
@@ -765,7 +793,7 @@ async function receiveUpload(req, res) {
 
   let type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
   if (!type || type === 'application/octet-stream' || type === 'application/x-www-form-urlencoded') type = TYPE_BY_EXT[path.extname(name).toLowerCase()] || 'application/octet-stream';
-  if (storage.enabled) return receiveToBucket(req, res, { link, slot, fileKey, folder, p, user, declared, hasPart, part, parts, before, name, type, tooBig, answer });
+  if (storage.enabled) return receiveToBucket(req, res, { t, link, slot, fileKey, folder, p, user, declared, hasPart, part, parts, before, name, type, tooBig, answer });
   const dir = path.join(UPLOADS, String(p.id));
   fs.mkdirSync(dir, { recursive: true });
   if (!st) {
@@ -806,6 +834,7 @@ async function receiveUpload(req, res) {
   } finally {
     slot.busy = false;
     reserved.delete(hold);
+    if (uploadLinks.get(t) === link) saveLink(t, link);
     if (last && (stored || !hasPart)) { fs.rm(st.tmp, { force: true }, () => {}); if (slot.partial === st) slot.partial = null; }
     if (stored && link.files.get(fileKey) === slot) link.files.delete(fileKey);
   }
@@ -813,7 +842,7 @@ async function receiveUpload(req, res) {
 // With object storage set up, each piece goes straight on to the bucket as one part of a multipart
 // upload, without touching this server's disk. The disk is small (it holds the database and
 // thumbnails), and a few big files arriving at once used to fill it.
-async function receiveToBucket(req, res, { link, slot, fileKey, folder, p, user, declared, hasPart, part, parts, before, name, type, tooBig, answer }) {
+async function receiveToBucket(req, res, { t, link, slot, fileKey, folder, p, user, declared, hasPart, part, parts, before, name, type, tooBig, answer }) {
   if (!Number.isFinite(declared) || declared <= 0)
     return answer(411, { ok: false, error: 'The file size is missing. Send the file with curl -T <file> <link>.' });
   const last = !hasPart || part === parts;
@@ -857,6 +886,7 @@ async function receiveToBucket(req, res, { link, slot, fileKey, folder, p, user,
   } finally {
     slot.busy = false;
     reserved.delete(hold);
+    if (uploadLinks.get(t) === link) saveLink(t, link);
   }
 }
 
