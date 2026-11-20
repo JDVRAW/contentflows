@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { download } = require('./fetch-file');
 
-function makeImporter({ db, token, storage, kindOf, makeThumb, insertAsset, spaceProblem, spaceLeft, reserved, MAX_UPLOAD, UPLOADS, fmtSize }) {
+function makeImporter({ db, token, storage, kindOf, makeThumb, queueView, insertAsset, spaceProblem, spaceLeft, reserved, MAX_UPLOAD, UPLOADS, fmtSize }) {
   const fail = (message) => Object.assign(new Error(message), { friendly: true });
   // Resolves to { id, name, kind, size }. Rejects with an Error whose message can be shown to the creator.
   // headers: sent with the download (only to the link's own site). folder: "BTS" or "BTS/Raw", or null.
@@ -64,6 +64,8 @@ function makeImporter({ db, token, storage, kindOf, makeThumb, insertAsset, spac
       if (folder) db.prepare('UPDATE assets SET folder = ? WHERE id = ?').run(folder, r.lastInsertRowid);
       const thumb = await makeThumb(where ? tmp : path.join(dir, stored), kind, r.lastInsertRowid);
       if (thumb) db.prepare('UPDATE assets SET thumb_name = ? WHERE id = ?').run(thumb, r.lastInsertRowid);
+      // Made from the bucket copy in the background (tmp is removed as soon as this returns).
+      if (queueView) queueView(r.lastInsertRowid);
       return { id: Number(r.lastInsertRowid), name, kind, size };
     } catch (e) {
       throw fail(`The file arrived but couldn't be saved: ${e.message}`);

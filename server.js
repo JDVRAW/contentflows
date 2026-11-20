@@ -8,7 +8,7 @@ const multer = require('multer');
 const { ZipArchive } = require('archiver');
 const { pipeline } = require('stream');
 const { db, DATA_DIR } = require('./src/db');
-const { kindOf, makeThumb, squashPhoto } = require('./src/media');
+const { kindOf, makeThumb, makeView, squashPhoto } = require('./src/media');
 const storage = require('./src/storage');
 const billing = require('./src/billing');
 const { PLANS, PAID, INTERVALS, planOf, canBrand, brandOf } = require('./src/plans');
@@ -360,6 +360,7 @@ function removeAssetFiles(a) {
   if (a.storage === 's3') { if (storage.enabled) storage.remove(a.stored_name); }
   else fs.rm(path.join(UPLOADS, String(a.project_id), a.stored_name), { force: true }, () => {});
   if (a.thumb_name) fs.rm(path.join(THUMBS, a.thumb_name), { force: true }, () => {});
+  if (a.view_name) { if (a.storage === 's3') { if (storage.enabled) storage.remove(a.view_name); } else fs.rm(path.join(THUMBS, a.view_name), { force: true }, () => {}); }
 }
 
 app.post('/projects/:id/assets/:aid/delete', requireUser, ownProject, (req, res) => {
@@ -679,22 +680,29 @@ app.post('/projects/:id/upload', requireUser, ownProject, checkSpace, upload.arr
     if (folder) setFolder.run(folder, r.lastInsertRowid);
     const thumb = await makeThumb(f.path, kind, r.lastInsertRowid);
     if (thumb) db.prepare('UPDATE assets SET thumb_name = ? WHERE id = ?').run(thumb, r.lastInsertRowid);
+    queueView(r.lastInsertRowid);
     out.push({ id: r.lastInsertRowid, name, kind, size: f.size });
   }
   res.json({ ok: true, files: out });
 });
 
 // ---------- upload links (for AI assistants on the creator's computer) ----------
-// The assistant's create_upload_links tool makes one link per file (src/mcp.js). An assistant that
-// can run commands on the creator's computer (Claude Desktop with folder access, Claude Code…)
-// sends the file to it with `curl -T <file> <link>`, so videos go from the computer straight into
-// the delivery without being shared anywhere first. Each link takes one file, works for 24 hours,
-// and is kept in memory: a restart voids links not used yet.
+// The assistant's create_upload_links tool makes one link per delivery folder (src/mcp.js). An
+// assistant that can run commands on the creator's computer (Claude Desktop with folder access,
+// Claude Code…) sends every file of a folder on that computer to it, each with
+// `curl -T <file> "<link>?name=<file name>"` (and &dir=<subfolder> to keep subfolders), so photos and
+// videos go from the computer straight into the delivery without being shared anywhere first.
+// A link takes any number of files for 24 hours. Links live in the database (upload_links), so they
+// survive a restart; so does a file partway into the bucket (its multipart upload id and the parts
+// that arrived), and the next part picks up where it left off. Without a bucket, a half-sent file
+// on disk is removed on restart (sweepUnfinishedUploads) and starts again from part 1.
 const UPLOAD_LINK_HOURS = 24;
-const uploadLinks = new Map(); // token -> { userId, projectId, name, folder, until }
-function makeUploadLink(user, p, { name, folder }) {
+const uploadLinks = new Map(); // token -> { userId, projectId, folder, until, files: Map(file key -> { partial, busy }) }
+function makeUploadLink(user, p, { folder }) {
   const t = token(24);
-  uploadLinks.set(t, { userId: user.id, projectId: p.id, name: name || null, folder: folder || null, until: Date.now() + UPLOAD_LINK_HOURS * 3600e3 });
+  const link = { userId: user.id, projectId: p.id, folder: folder || null, until: Date.now() + UPLOAD_LINK_HOURS * 3600e3, files: new Map() };
+  uploadLinks.set(t, link);
+  saveLink(t, link);
   return { token: t, expires_at: new Date(Date.now() + UPLOAD_LINK_HOURS * 3600e3).toISOString() };
 }
 // Types for files sent without one (curl -T sends none), so videos and photos still play in the browser.
@@ -709,17 +717,49 @@ const TYPE_BY_EXT = { '.mp4': 'video/mp4', '.m4v': 'video/x-m4v', '.mov': 'video
 // A failed piece can be sent again; a piece that already arrived is answered as done.
 const PART_MAX = 99 * 1000 * 1000;
 const PART_HINT = 'Files over 90 MB must go in parts: split -b 90m <file> and PUT each piece in order to <link>?part=N&parts=TOTAL.';
-function dropParts(link) { if (link && link.partial) { fs.rm(link.partial.tmp, { force: true }, () => {}); link.partial = null; } }
-setInterval(() => { const now = Date.now(); for (const [t, l] of uploadLinks) if (l.until < now) { dropParts(l); uploadLinks.delete(t); } }, 3600e3).unref();
+// A file partway in (slot.partial) is thrown away: its pieces on disk, or its upload in the bucket.
+function dropParts(slot) {
+  const st = slot && slot.partial;
+  if (!st) return;
+  if (st.uploadId) storage.abortUpload(st.key, st.uploadId); else fs.rm(st.tmp, { force: true }, () => {});
+  slot.partial = null;
+}
+const dropLink = (link) => { for (const slot of link.files.values()) dropParts(slot); link.files.clear(); };
+const saveLinkRow = db.prepare('INSERT OR REPLACE INTO upload_links (token, user_id, project_id, folder, until, files) VALUES (?, ?, ?, ?, ?, ?)');
+function saveLink(t, l) {
+  const files = [...l.files].filter(([, slot]) => slot.partial && slot.partial.uploadId).map(([k, slot]) => [k, slot.partial]);
+  saveLinkRow.run(t, l.userId, l.projectId, l.folder, l.until, JSON.stringify(files));
+}
+const forgetLink = (t) => db.prepare('DELETE FROM upload_links WHERE token = ?').run(t);
+function endLink(t, l) { dropLink(l); uploadLinks.delete(t); forgetLink(t); }
+// Links from before the last restart. Expired ones give back their half-sent bucket uploads.
+for (const r of db.prepare('SELECT * FROM upload_links').all()) {
+  let files = [];
+  try { files = JSON.parse(r.files || '[]'); } catch (e) { /* keep the link, lose the half-sent files */ }
+  const l = { userId: r.user_id, projectId: r.project_id, folder: r.folder, until: r.until,
+    files: new Map(files.filter(([, st]) => st && st.uploadId && storage.enabled).map(([k, partial]) => [k, { partial, busy: false }])) };
+  if (l.until < Date.now()) endLink(r.token, l); else uploadLinks.set(r.token, l);
+}
+// The minimum size of every part but the last in a bucket multipart upload.
+const BUCKET_PART_MIN = 5 * 1024 * 1024;
+setInterval(() => { const now = Date.now(); for (const [t, l] of uploadLinks) if (l.until < now) endLink(t, l); }, 3600e3).unref();
 
 async function receiveUpload(req, res) {
   const t = req.params.t;
   const link = uploadLinks.get(t);
-  const answer = (status, body) => { req.resume(); res.status(status).json(body); };
+  // Answers only once the whole body has been read: answering early and closing makes curl stop
+  // with "Failed sending data to the peer" (exit 55) even when the answer is ok.
+  const answer = (status, body) => {
+    const send = () => { if (!res.headersSent) res.status(status).json(body); };
+    if (req.complete || req.readableEnded) return send();
+    req.on('end', send);
+    req.on('error', () => {});
+    req.resume();
+  };
   if (!link || link.until < Date.now()) return answer(404, { ok: false, error: 'This upload link is unknown, used or expired. Ask for a new one.' });
   const p = db.prepare('SELECT * FROM projects WHERE id = ?').get(link.projectId);
   const row = p && db.prepare('SELECT * FROM users WHERE id = ? AND id = ?').get(link.userId, p.user_id);
-  if (!row) { dropParts(link); uploadLinks.delete(t); return answer(404, { ok: false, error: 'The delivery for this link was deleted.' }); }
+  if (!row) { endLink(t, link); return answer(404, { ok: false, error: 'The delivery for this link was deleted.' }); }
   const user = billing.view(row);
   const max = Math.min(MAX_UPLOAD, spaceLeft(user));
   const declared = Number(req.headers['content-length']);
@@ -730,33 +770,40 @@ async function receiveUpload(req, res) {
   const part = Number(req.query.part), parts = Number(req.query.parts);
   if (hasPart && !(Number.isInteger(part) && Number.isInteger(parts) && part >= 1 && parts >= 1 && part <= parts && parts <= 10000))
     return answer(400, { ok: false, error: 'part and parts must be whole numbers with 1 <= part <= parts.' });
-  if (link.busy) return answer(409, { ok: false, error: 'Another upload on this link is still running. Wait for it to finish.' });
-  let st = link.partial;
+  // Which file this is: its name, and the subfolder it sits in under the link's folder.
+  const name = String(req.query.name || '').replace(/[\\/\x00-\x1f]/g, '_').trim().slice(0, 255);
+  if (!name) return answer(400, { ok: false, error: 'Add the file name to the link: <link>?name=<file name> (curl --url-query "name=…" -T <file> <link>).' });
+  const folder = cleanFolder([link.folder, req.query.dir].filter(Boolean).join('/'));
+  const fileKey = `${folder || ''}\n${name}`;
+  if (!link.files.has(fileKey)) link.files.set(fileKey, { partial: null, busy: false });
+  const slot = link.files.get(fileKey);
+  if (slot.busy) return answer(409, { ok: false, error: `${name} is already being sent. Wait for it to finish.` });
+  let st = slot.partial;
   if (hasPart) {
-    if (st && st.parts !== parts) return answer(409, { ok: false, error: `This upload was started with parts=${st.parts}. Keep sending that, or ask for a new link.` });
+    if (st && st.parts !== parts) return answer(409, { ok: false, error: `${name} was started with parts=${st.parts}. Keep sending that, or ask for a new link.` });
     const got = st ? st.got : 0;
     if (part <= got) return answer(200, { ok: true, part, parts, received: got, note: 'That part already arrived.' });
     if (part !== got + 1) return answer(409, { ok: false, error: `Send part ${got + 1} next.`, next_part: got + 1 });
     if (Number.isFinite(declared) && declared > PART_MAX) return answer(413, { ok: false, error: `Each part must be under ${PART_MAX / 1e6} MB. Split with split -b 90m.` });
   } else if (st) {
-    return answer(409, { ok: false, error: `This link is partway through a ${st.parts}-part upload. Send part ${st.got + 1} next.`, next_part: st.got + 1 });
+    return answer(409, { ok: false, error: `${name} is partway through a ${st.parts}-part upload. Send part ${st.got + 1} next.`, next_part: st.got + 1 });
   }
   const before = st ? st.bytes : 0;
   if (Number.isFinite(declared) && before + declared > max) return answer(413, { ok: false, error: tooBig(before + declared) });
 
-  const name = String(req.query.name || link.name || 'file').slice(0, 255);
   let type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
   if (!type || type === 'application/octet-stream' || type === 'application/x-www-form-urlencoded') type = TYPE_BY_EXT[path.extname(name).toLowerCase()] || 'application/octet-stream';
+  if (storage.enabled) return receiveToBucket(req, res, { t, link, slot, fileKey, folder, p, user, declared, hasPart, part, parts, before, name, type, tooBig, answer });
   const dir = path.join(UPLOADS, String(p.id));
   fs.mkdirSync(dir, { recursive: true });
   if (!st) {
     st = { tmp: path.join(dir, `${token(12)}.part`), got: 0, bytes: 0, parts: hasPart ? parts : 1 };
-    if (hasPart) link.partial = st;
+    if (hasPart) slot.partial = st;
   }
   const last = !hasPart || part === parts;
   const hold = `link:${token(9)}`;
   reserved.set(hold, { userId: user.id, size: Number.isFinite(declared) ? before + declared : max, at: Date.now() });
-  link.busy = true;
+  slot.busy = true;
   let size = 0;
   let stored = false;
   try {
@@ -773,24 +820,84 @@ async function receiveUpload(req, res) {
     if (Number.isFinite(declared) && size !== declared) throw Object.assign(new Error(`got ${size} of ${declared} bytes`), { code: 'ESHORT' });
     st.got += 1; st.bytes = before + size;
     if (!last) return res.json({ ok: true, part, parts, received: st.got, next_part: st.got + 1 });
-    uploadLinks.delete(t); // one file per link
-    const f = await importFile.store(p, st.tmp, { name, type, size: st.bytes, folder: link.folder });
+    const f = await importFile.store(p, st.tmp, { name, type, size: st.bytes, folder });
     stored = true;
     res.json({ ok: true, file: { id: f.id, name: f.name, kind: f.kind, size: V.fmtSize(f.size) }, delivery: `${originOf(req)}/d/${p.share_token}` });
   } catch (e) {
     // The link stays usable after a failed or cut-off upload; a part can be sent again.
     if (st.got === (hasPart ? part : 1)) st.got -= 1; // the store step failed after the last part landed
     fs.truncate(st.tmp, before, () => {});
-    uploadLinks.set(t, link);
     if (e.code === 'ETOOBIG') return res.status(413).json({ ok: false, error: tooBig(before + size) });
     if (e.code === 'EPARTBIG') return res.status(413).json({ ok: false, error: `Each part must be under ${PART_MAX / 1e6} MB. Split with split -b 90m.` });
     if (e.code === 'EEMPTY') return res.status(400).json({ ok: false, error: 'No file arrived. Send it with curl -T <file> <link>.' });
     if (!res.headersSent) res.status(e.friendly ? 500 : 400).json({ ok: false, error: e.friendly ? e.message : `The upload was cut off: ${e.message}. Send ${hasPart ? `part ${part}` : 'it'} again.` });
   } finally {
-    link.busy = false;
+    slot.busy = false;
     reserved.delete(hold);
-    if (last && (stored || !hasPart)) { fs.rm(st.tmp, { force: true }, () => {}); if (link.partial === st) link.partial = null; }
+    if (uploadLinks.get(t) === link) saveLink(t, link);
+    if (last && (stored || !hasPart)) { fs.rm(st.tmp, { force: true }, () => {}); if (slot.partial === st) slot.partial = null; }
+    if (stored && link.files.get(fileKey) === slot) link.files.delete(fileKey);
   }
+}
+// With object storage set up, each piece goes straight on to the bucket as one part of a multipart
+// upload, without touching this server's disk. The disk is small (it holds the database and
+// thumbnails), and a few big files arriving at once used to fill it.
+async function receiveToBucket(req, res, { t, link, slot, fileKey, folder, p, user, declared, hasPart, part, parts, before, name, type, tooBig, answer }) {
+  if (!Number.isFinite(declared) || declared <= 0)
+    return answer(411, { ok: false, error: 'The file size is missing. Send the file with curl -T <file> <link>.' });
+  const last = !hasPart || part === parts;
+  let st = slot.partial;
+  const split = 'Split the file with split -b 90m and send the pieces in order.';
+  if (!last && declared < BUCKET_PART_MIN) return answer(400, { ok: false, error: `Every part but the last must be at least 5 MB. ${split}` });
+  if (st && st.partSize && (last ? declared > st.partSize : declared !== st.partSize))
+    return answer(400, { ok: false, error: `Every part but the last must be the same size (${st.partSize} bytes), and the last no bigger. ${split}` });
+  const hold = `link:${token(9)}`;
+  reserved.set(hold, { userId: user.id, size: before + declared, at: Date.now() });
+  slot.busy = true;
+  let stored = false;
+  try {
+    if (!st) {
+      const ext = path.extname(name).toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 12);
+      const key = `projects/${p.id}/${token(12)}${ext}`;
+      st = { key, uploadId: await storage.startUpload(key, type), got: 0, bytes: 0, parts: hasPart ? parts : 1, partSize: last ? null : declared, done: [] };
+      slot.partial = st;
+    }
+    const PartNumber = st.got + 1;
+    const ETag = await storage.putPart(st.key, st.uploadId, PartNumber, req, declared);
+    st.done.push({ PartNumber, ETag });
+    st.got = PartNumber; st.bytes += declared;
+    if (!last) return res.json({ ok: true, part, parts, received: st.got, next_part: st.got + 1 });
+    const size = await storage.completeUpload(st.key, st.uploadId, st.done);
+    slot.partial = null;
+    stored = true;
+    if (link.files.get(fileKey) === slot) link.files.delete(fileKey);
+    const f = await storeFromBucket(p, st.key, { name, type, size, folder });
+    res.json({ ok: true, file: { id: f.id, name: f.name, kind: f.kind, size: V.fmtSize(f.size) }, delivery: `${originOf(req)}/d/${p.share_token}` });
+  } catch (e) {
+    if (stored) { // in the bucket, but the delivery couldn't be updated
+      console.error('upload link store', e);
+      if (!res.headersSent) res.status(500).json({ ok: false, error: `The file arrived but couldn't be saved: ${e.message}` });
+      return;
+    }
+    if (st && st.got === (hasPart ? part : 1)) { st.got -= 1; st.bytes -= declared; st.done.pop(); } // completing failed: send the last part again
+    if (!hasPart) dropParts(slot); // a single-piece upload simply starts over
+    console.error('upload link', e.name, e.message);
+    if (!res.headersSent) res.status(400).json({ ok: false, error: `The upload was cut off: ${e.message}. Send ${hasPart ? `part ${part}` : 'it'} again.` });
+  } finally {
+    slot.busy = false;
+    reserved.delete(hold);
+    if (uploadLinks.get(t) === link) saveLink(t, link);
+  }
+}
+
+// Adds a file already in the bucket to a delivery, then makes its thumbnail from there.
+async function storeFromBucket(p, key, { name: raw, type, size, folder }) {
+  const name = String(raw || 'file').replace(/[\\/\x00-\x1f]/g, '_').slice(0, 255) || 'file';
+  const kind = kindOf(type || '', name);
+  const r = insertAsset.run(p.id, name, key, type, size, kind, 's3', p.id);
+  if (folder) setFolder.run(folder, r.lastInsertRowid);
+  await thumbFromStorage(key, kind, r.lastInsertRowid);
+  return { id: Number(r.lastInsertRowid), name, kind, size };
 }
 app.put('/up/:t', receiveUpload);
 app.post('/up/:t', receiveUpload);
@@ -818,15 +925,19 @@ app.get('/_relay/:t', async (req, res) => {
   }
 });
 
-async function thumbFromStorage(key, kind, id) {
-  if (kind !== 'image' && kind !== 'video') return null;
+// Runs fn with a loopback URL ffmpeg can read the bucket object through.
+async function viaRelay(key, fn) {
   const t = token(18);
   relays.set(t, { key });
-  try {
-    const thumb = await makeThumb(`http://127.0.0.1:${PORT}/_relay/${t}`, kind, id);
-    if (thumb) db.prepare('UPDATE assets SET thumb_name = ? WHERE id = ?').run(thumb, id);
-    return thumb;
-  } finally { relays.delete(t); }
+  try { return await fn(`http://127.0.0.1:${PORT}/_relay/${t}`); } finally { relays.delete(t); }
+}
+
+async function thumbFromStorage(key, kind, id) {
+  if (kind !== 'image' && kind !== 'video') return null;
+  const thumb = await viaRelay(key, (url) => makeThumb(url, kind, id));
+  if (thumb) db.prepare('UPDATE assets SET thumb_name = ? WHERE id = ?').run(thumb, id);
+  queueView(id);
+  return thumb;
 }
 
 // Photos and videos in the bucket that have no thumbnail yet (an earlier attempt failed) get another
@@ -839,6 +950,49 @@ async function backfillThumbs() {
     const ok = await thumbFromStorage(a.stored_name, a.kind, a.id).catch((e) => console.error('backfill', a.id, e.message));
     console.log(`thumbnail for asset ${a.id}: ${ok ? 'made' : 'failed'}`);
   }
+}
+
+// ---------- screen-sized views of photos ----------
+// The client gallery's cover and big viewer show a 2560 px JPEG instead of the original, so a delivery
+// of 50 MB PNGs opens as fast as one of JPEGs. Made after upload, or on first look for older photos.
+// Files in the bucket keep their view in the bucket too (views/<id>.jpg), so the server's small disk
+// doesn't fill up with them.
+const viewJobs = new Map(); // asset id -> promise of the updated asset (or null)
+function ensureView(a) {
+  if (!a || a.kind !== 'image') return Promise.resolve(null);
+  if (a.view_name) return Promise.resolve(a);
+  if (viewJobs.has(a.id)) return viewJobs.get(a.id);
+  const job = (async () => {
+    const s3 = a.storage === 's3';
+    if (s3 && !storage.enabled) return null;
+    const made = s3 ? await viaRelay(a.stored_name, (url) => makeView(url, a.id))
+      : await makeView(path.join(UPLOADS, String(a.project_id), a.stored_name), a.id);
+    if (!made) return null;
+    let name = made;
+    if (s3) {
+      const local = path.join(THUMBS, made);
+      name = `views/${a.id}.jpg`;
+      try { await storage.putFile(name, local, 'image/jpeg'); } finally { fs.rm(local, { force: true }, () => {}); }
+    }
+    // The photo may have been deleted while its view was being made.
+    if (!db.prepare('UPDATE assets SET view_name = ? WHERE id = ?').run(name, a.id).changes) {
+      if (s3) storage.remove(name); else fs.rm(path.join(THUMBS, name), { force: true }, () => {});
+      return null;
+    }
+    return { ...a, view_name: name };
+  })().catch((e) => { console.error(`view image failed for asset ${a.id}: ${e.message}`); return null; })
+    .finally(() => viewJobs.delete(a.id));
+  viewJobs.set(a.id, job);
+  return job;
+}
+const queueView = (id) => { ensureView(db.prepare('SELECT * FROM assets WHERE id = ?').get(id)); };
+
+// Photos from before views existed get theirs after each start, one at a time, newest first.
+async function backfillViews() {
+  // With a bucket set up, only photos in it: views of older photos on the small disk are made on first look.
+  const missing = db.prepare(`SELECT * FROM assets WHERE kind = 'image' AND view_name IS NULL
+    AND (storage = 's3' OR ?) ORDER BY id DESC LIMIT 500`).all(storage.enabled ? 0 : 1);
+  for (const a of missing) await ensureView(a);
 }
 
 // ---------- creator: direct uploads to object storage (R2) ----------
@@ -1262,7 +1416,7 @@ app.get('/brand/:file', (req, res) => {
   res.sendFile(path.join(BRAND, f), { maxAge: '365d', immutable: true }, (e) => { if (e && !res.headersSent) res.status(404).end(); });
 });
 
-const importFile = makeImporter({ db, token, storage, kindOf, makeThumb, insertAsset, spaceProblem, spaceLeft, reserved, MAX_UPLOAD, UPLOADS, fmtSize: V.fmtSize });
+const importFile = makeImporter({ db, token, storage, kindOf, makeThumb, queueView, insertAsset, spaceProblem, spaceLeft, reserved, MAX_UPLOAD, UPLOADS, fmtSize: V.fmtSize });
 
 app.use('/mcp', mcpRouter({
   db, token, TYPES: V.TYPES, deleteDelivery, removeAssetFiles, importFile, usage, originOf, fmtSize: V.fmtSize, userView: billing.view,
@@ -1369,6 +1523,25 @@ async function sendFromStorage(res, a, attachment) {
 // Files on this server's disk come from the site's own address, so they also get a sandbox: even if
 // a browser did render one as a page, it couldn't run scripts or act as the signed-in creator.
 const fileHeaders = { 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': 'sandbox' };
+
+// A photo at screen size (see ensureView) for the gallery's cover and viewer. Falls back to the
+// original when a view can't be made (a format ffmpeg can't read).
+app.get('/d/:token/view/:aid', loadDelivery, requireUnlocked, async (req, res) => {
+  let a = getAsset(req);
+  if (!a) return res.sendStatus(404);
+  if (a.kind === 'image' && !a.view_name) a = (await ensureView(a)) || a;
+  if (!a.view_name) return res.redirect(302, `/d/${req.params.token}/media/${a.id}`);
+  res.set({ 'Cache-Control': 'private, max-age=604800', 'X-Content-Type-Options': 'nosniff' });
+  if (a.storage !== 's3') return res.sendFile(path.join(THUMBS, a.view_name), (e) => { if (e && !res.headersSent) res.sendStatus(404); });
+  try {
+    const body = await storage.getStream(a.view_name);
+    res.type('image/jpeg');
+    pipeline(body, res, () => {});
+  } catch (e) {
+    console.error('view', a.id, e.name, e.message);
+    if (!res.headersSent) res.redirect(302, `/d/${req.params.token}/media/${a.id}`);
+  }
+});
 
 // Inline streaming (sendFile handles HTTP Range requests for video seeking).
 app.get('/d/:token/media/:aid', loadDelivery, requireUnlocked, async (req, res) => {
@@ -1490,7 +1663,7 @@ if (require.main === module) {
   console.log(`Files are stored in ${storage.enabled ? `object storage, ${storage.describe}` : storage.describe}`);
   const server = app.listen(PORT, () => {
     console.log(`ContentFlows running on http://localhost:${PORT}`);
-    setTimeout(() => backfillThumbs().catch((e) => console.error('backfill', e)), 2000);
+    setTimeout(() => backfillThumbs().catch((e) => console.error('backfill', e)).then(() => backfillViews()).catch((e) => console.error('views backfill', e)), 2000);
     billing.labelOldCustomers().catch((e) => console.error('stripe mode check', e.message));
   });
   // Node cuts any request after 5 minutes by default, which kills big uploads on slow connections.

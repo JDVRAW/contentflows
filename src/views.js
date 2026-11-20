@@ -1204,7 +1204,7 @@ function deliveryPage({ project: p, assets, studio, brand, host = '', folderOrde
     : until ? `Available until ${fmtDate(until.at)}. Save what you need before then.${waiting ? ` Files are removed ${keepFor} after your first download.` : ''}`
     : waiting ? `Files are removed ${keepFor} after your first download, so save everything you need.`
     : 'This link stays live until your creator turns it off.';
-  const items = visual.map((a) => ({ id: a.id, kind: a.kind, name: a.original_name, size: a.size, src: `${base}/media/${a.id}`, poster: a.thumb_name ? `${base}/thumb/${a.id}` : null, dl: p.allow_download ? `${base}/download/${a.id}` : null }));
+  const items = visual.map((a) => ({ id: a.id, kind: a.kind, name: a.original_name, size: a.size, src: `${base}/${a.kind === 'image' ? 'view' : 'media'}/${a.id}`, poster: a.thumb_name ? `${base}/thumb/${a.id}` : null, dl: p.allow_download ? `${base}/download/${a.id}` : null }));
   const ext = (n) => esc((n.split('.').pop() || 'file').slice(0, 4).toUpperCase());
   // Each tile's real shape (width / height of its thumbnail), so vertical photos and films show whole.
   // Extreme panoramas or slivers are kept within reason; the viewer still shows them in full.
@@ -1221,7 +1221,7 @@ function deliveryPage({ project: p, assets, studio, brand, host = '', folderOrde
   ${cover && cover.thumb_name ? `<div class="fs-backdrop" style="background-image:url('${base}/thumb/${cover.id}')" aria-hidden="true"></div>` : ''}
   ${cover ? (cover.kind === 'video'
     ? `<video class="fs-media" src="${base}/media/${cover.id}"${cover.thumb_name ? ` poster="${base}/thumb/${cover.id}"` : ''} autoplay muted loop playsinline preload="metadata"></video>`
-    : `<img class="fs-media" src="${base}/media/${cover.id}" alt="">`) : ''}
+    : `<img class="fs-media" src="${base}/view/${cover.id}" alt="">`) : ''}
   <h1 class="fs-title">${esc(p.title)}${p.client_name ? `<br><span>for ${esc(p.client_name)}.</span>` : ''}</h1>
   <div class="fs-aside">
     <p class="fs-mono">${esc(type)} · ${assets.length} file${assets.length === 1 ? '' : 's'} · ${fmtSize(total)}<br>Delivered by ${esc(studio)}</p>
