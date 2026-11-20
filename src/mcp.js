@@ -269,42 +269,47 @@ function mcpRouter(ctx) {
     });
 
     server.registerTool('create_upload_links', {
-      title: 'Upload files from this computer',
-      description: 'Make one private upload link per file so files on the user\'s own computer go straight into a delivery at full quality. '
-        + 'Then, for each file, run the returned command on that computer: curl for files up to 90 MB, parts_script for bigger ones '
-        + '(the site refuses single requests over 100 MB, so the script splits the file into 90 MB parts and sends them in order). The last answer is JSON with ok and the new file. '
+      title: 'Upload folders from this computer',
+      description: 'Make one private upload link per folder so files on the user\'s own computer go straight into a delivery at full quality. '
+        + 'One link takes every file of a folder: run the returned folder_script on that computer with the folder\'s real path, and it sends each file '
+        + '(subfolders become folders in the delivery, hidden files like .DS_Store are skipped, files over 90 MB go in 90 MB parts since the site refuses single requests over 100 MB) '
+        + 'and prints one line per file, ok or FAILED. For one loose file use the curl command instead. '
         + 'Use it when the files are local (Desktop, Downloads, an external drive). It needs an app that can run commands on the user\'s computer, '
         + 'such as Claude Desktop with folder access or Claude Code; in a chat with no access to the computer, tell the user to upload in the ContentFlows app instead. '
-        + 'Each link takes one file and expires after 24 hours. No size limit beyond the plan and the per-file limit.',
+        + 'Links work for 24 hours. No size limit beyond the plan and the per-file limit. Do not make a link per file.',
       inputSchema: {
         delivery_id: z.number().int(),
-        files: z.array(z.object({
-          name: z.string().min(1).max(255).describe('File name with extension as the client should see it, like "Reel 2.mp4"'),
-          size_bytes: z.number().int().min(0).optional().describe('File size, when known, to check the plan has room first'),
-        })).min(1).max(100),
-        folder: z.string().max(300).optional().describe('Delivery folder to put them in, like "Reels". Default: the top level'),
+        folders: z.array(z.object({
+          folder: z.string().max(300).optional().describe('Delivery folder the files go in, like "Selects". Leave out for the top level'),
+          size_bytes: z.number().int().min(0).optional().describe('Total size of the files, when known, to check the plan has room first'),
+        })).min(1).max(50).optional().describe('One entry per folder to upload. Default: one link for the delivery\'s top level'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    }, async ({ delivery_id, files, folder }) => {
+    }, async ({ delivery_id, folders }) => {
       const p = own(delivery_id);
       if (!p) return fail(`No delivery with id ${delivery_id}.`);
-      const full = spaceProblem(user, files.reduce((n, f) => n + (f.size_bytes || 0), 0));
+      folders = folders && folders.length ? folders : [{}];
+      const full = spaceProblem(user, folders.reduce((n, f) => n + (f.size_bytes || 0), 0));
       if (full) return fail(`${full} Upgrade at ${origin}/pricing`);
-      const dest = cleanFolder(folder);
-      const links = files.map((f) => {
-        const l = makeUploadLink(user, p, { name: f.name, folder: dest });
+      const links = folders.map((f) => {
+        const dest = cleanFolder(f.folder);
+        const l = makeUploadLink(user, p, { folder: dest });
         const url = `${origin}/up/${l.token}`;
-        const file = `<path to ${f.name.replace(/["$`\\]/g, '')}>`;
-        const curl = `curl --fail-with-body -T "${file}" "${url}"`;
-        const partsScript = `f="${file}"; d="$(mktemp -d)" && split -b 90m "$f" "$d/p" && n=$(ls "$d" | wc -l | tr -d ' ') && i=0 && `
-          + `for p in "$d"/p*; do i=$((i+1)); curl --fail-with-body --retry 3 -T "$p" "${url}?part=$i&parts=$n" || break; done; rm -rf "$d"`;
-        const big = f.size_bytes === undefined ? undefined : f.size_bytes > 90 * 1024 * 1024;
-        return { name: f.name, upload_url: url,
-          ...(big !== true ? { curl } : {}), ...(big !== false ? { parts_script: partsScript } : {}),
-          expires_at: l.expires_at };
+        const q = '--url-query "name=$n" --url-query "dir=$d"';
+        const send = `curl -sS --fail-with-body --retry 3 ${q}`;
+        // bash 3.2 (macOS) and up. Every regular, non-hidden file under the folder, in name order.
+        const folderScript = `cd "<path to folder>" && find . -type f ! -name '.*' ! -path '*/.*' -print0 | sort -z | while IFS= read -r -d '' f; do `
+          + `f="\${f#./}"; n="\${f##*/}"; d="$(dirname "$f")"; [ "$d" = . ] && d=""; s=$(wc -c < "$f" | tr -d ' '); `
+          + `if [ "$s" -le 94371840 ]; then ${send} -T "$f" "${url}" >/dev/null && echo "ok $f" || echo "FAILED $f"; `
+          + `else t="$(mktemp -d)"; split -b 90m "$f" "$t/p"; c=$(ls "$t" | wc -l | tr -d ' '); i=0; r=0; `
+          + `for p in "$t"/p*; do i=$((i+1)); ${send} --url-query "part=$i" --url-query "parts=$c" -T "$p" "${url}" >/dev/null || { r=1; break; }; done; `
+          + `rm -rf "$t"; [ $r = 0 ] && echo "ok $f" || echo "FAILED $f"; fi; done`;
+        const curl = `curl --fail-with-body --url-query "name=<file name>" -T "<path to file>" "${url}"`;
+        return { folder: dest, upload_url: url, folder_script: folderScript, curl, expires_at: l.expires_at };
       });
-      return ok({ delivery_id: p.id, folder: dest, links,
-        how: 'Put the real file path in place of <path to …>. Use curl for files up to 90 MB and parts_script (bash, macOS or Linux) for bigger ones; parts must go in order. One file per link; a failed upload or part can be sent again on the same link.',
+      return ok({ delivery_id: p.id, links,
+        how: 'Put the real folder path in place of <path to folder> and run folder_script with bash on the user\'s computer (it needs curl 7.87 or newer, which any recent Mac has); it can take a while for big folders. '
+          + 'Run it again for any FAILED files, or send one file with curl (name is the name the client sees). Files already sent are not skipped on a rerun, so only resend the failed ones.',
         share_link: link(p) });
     });
 
