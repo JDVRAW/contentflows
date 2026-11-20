@@ -271,7 +271,8 @@ function mcpRouter(ctx) {
     server.registerTool('create_upload_links', {
       title: 'Upload files from this computer',
       description: 'Make one private upload link per file so files on the user\'s own computer go straight into a delivery at full quality. '
-        + 'Then, for each file, run the returned curl command on that computer (curl -T "<path>" "<upload_url>"); the answer is JSON with ok and the new file. '
+        + 'Then, for each file, run the returned command on that computer: curl for files up to 90 MB, parts_script for bigger ones '
+        + '(the site refuses single requests over 100 MB, so the script splits the file into 90 MB parts and sends them in order). The last answer is JSON with ok and the new file. '
         + 'Use it when the files are local (Desktop, Downloads, an external drive). It needs an app that can run commands on the user\'s computer, '
         + 'such as Claude Desktop with folder access or Claude Code; in a chat with no access to the computer, tell the user to upload in the ContentFlows app instead. '
         + 'Each link takes one file and expires after 24 hours. No size limit beyond the plan and the per-file limit.',
@@ -293,10 +294,17 @@ function mcpRouter(ctx) {
       const links = files.map((f) => {
         const l = makeUploadLink(user, p, { name: f.name, folder: dest });
         const url = `${origin}/up/${l.token}`;
-        return { name: f.name, upload_url: url, curl: `curl --fail-with-body -T "<path to ${f.name.replace(/"/g, '')}>" "${url}"`, expires_at: l.expires_at };
+        const file = `<path to ${f.name.replace(/["$`\\]/g, '')}>`;
+        const curl = `curl --fail-with-body -T "${file}" "${url}"`;
+        const partsScript = `f="${file}"; d="$(mktemp -d)" && split -b 90m "$f" "$d/p" && n=$(ls "$d" | wc -l | tr -d ' ') && i=0 && `
+          + `for p in "$d"/p*; do i=$((i+1)); curl --fail-with-body --retry 3 -T "$p" "${url}?part=$i&parts=$n" || break; done; rm -rf "$d"`;
+        const big = f.size_bytes === undefined ? undefined : f.size_bytes > 90 * 1024 * 1024;
+        return { name: f.name, upload_url: url,
+          ...(big !== true ? { curl } : {}), ...(big !== false ? { parts_script: partsScript } : {}),
+          expires_at: l.expires_at };
       });
       return ok({ delivery_id: p.id, folder: dest, links,
-        how: 'Run each curl command on the user\'s computer with the real file path. Upload one file per link; a failed upload can be retried on the same link.',
+        how: 'Put the real file path in place of <path to …>. Use curl for files up to 90 MB and parts_script (bash, macOS or Linux) for bigger ones; parts must go in order. One file per link; a failed upload or part can be sent again on the same link.',
         share_link: link(p) });
     });
 
