@@ -1204,7 +1204,7 @@ function deliveryPage({ project: p, assets, studio, brand, host = '', folderOrde
     : until ? `Available until ${fmtDate(until.at)}. Save what you need before then.${waiting ? ` Files are removed ${keepFor} after your first download.` : ''}`
     : waiting ? `Files are removed ${keepFor} after your first download, so save everything you need.`
     : 'This link stays live until your creator turns it off.';
-  const items = visual.map((a) => ({ id: a.id, kind: a.kind, name: a.original_name, size: a.size, src: `${base}/${a.kind === 'image' ? 'view' : 'media'}/${a.id}`, poster: a.thumb_name ? `${base}/thumb/${a.id}` : null, dl: p.allow_download ? `${base}/download/${a.id}` : null }));
+  const items = visual.map((a) => ({ id: a.id, kind: a.kind, name: a.original_name, mime: a.mime, size: a.size, src: `${base}/${a.kind === 'image' ? 'view' : 'media'}/${a.id}`, poster: a.thumb_name ? `${base}/thumb/${a.id}` : null, dl: p.allow_download ? `${base}/download/${a.id}` : null }));
   const ext = (n) => esc((n.split('.').pop() || 'file').slice(0, 4).toUpperCase());
   // Each tile's real shape (width / height of its thumbnail), so vertical photos and films show whole.
   // Extreme panoramas or slivers are kept within reason; the viewer still shows them in full.
@@ -1215,7 +1215,7 @@ function deliveryPage({ project: p, assets, studio, brand, host = '', folderOrde
   const longNote = (p.message || '').length > 150;
   const filters = photos && films ? `<div class="dl-filter" role="group" aria-label="Show">
       <button type="button" class="on" data-f="all" aria-pressed="true">All <em>${visual.length}</em></button><button type="button" data-f="image" aria-pressed="false">Photos <em>${photos}</em></button><button type="button" data-f="video" aria-pressed="false">Films <em>${films}</em></button><span class="dl-filter-dot" aria-hidden="true"></span></div>` : '';
-  return layout({ title: p.title, bodyClass: 'delivery', scripts: ['/static/gallery.js'],
+  return layout({ title: p.title, bodyClass: 'delivery', scripts: ['/static/gallery.js', '/static/photos.js'],
     header: deliveryHeader({ studio, brand, links, cta: canDl ? { href: `${base}/zip`, label: `Download all` } : null }), body: `
 <section class="fs-hero dl-hero" id="top" data-header-theme="light">
   ${cover && cover.thumb_name ? `<div class="fs-backdrop" style="background-image:url('${base}/thumb/${cover.id}')" aria-hidden="true"></div>` : ''}
