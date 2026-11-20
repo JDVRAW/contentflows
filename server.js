@@ -16,6 +16,7 @@ const V = require('./src/views');
 const { mcpRouter, newKey, hashKey } = require('./src/mcp');
 const mail = require('./src/mail');
 const vault = require('./src/vault');
+const gdrive = require('./src/gdrive');
 const { makeImporter } = require('./src/import-file');
 const retention = require('./src/retention');
 
@@ -808,18 +809,20 @@ const mcpUrl = (req, key) => `${originOf(req)}/mcp/${key}`;
 const keysOf = (userId) => db.prepare('SELECT id, name, hint, last_used_at, created_at FROM api_keys WHERE user_id = ? ORDER BY id DESC').all(userId);
 
 app.get('/connect', requireUser, (req, res) => {
-  res.send(V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req), vault: vaultView(req.user),
-    vaultNotice: req.query.vault === 'connected' ? 'Your Vault is connected. Open a delivery and choose Add from Vault.' : null }));
+  res.send(connectWith(req, {
+    vaultNotice: req.query.vault === 'connected' ? 'Your Vault is connected. Open a delivery and choose Add from Vault.' : null,
+    googleNotice: req.query.google === 'connected' ? 'Google Drive is connected. Ask your AI assistant to add files from it to any delivery.'
+      : req.query.google === 'cancelled' ? 'Google Drive wasn’t connected.' : null }));
 });
 app.post('/connect/keys', requireUser, (req, res) => {
   const name = String(req.body.name || '').trim().slice(0, 80) || 'AI assistant';
   if (keysOf(req.user.id).length >= 20)
-    return res.status(400).send(V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req), vault: vaultView(req.user), error: 'You have 20 keys. Revoke one you no longer use first.' }));
+    return res.status(400).send(connectWith(req, { error: 'You have 20 keys. Revoke one you no longer use first.' }));
   const key = newKey();
   db.prepare('INSERT INTO api_keys (user_id, name, key_hash, hint) VALUES (?, ?, ?, ?)').run(req.user.id, name, hashKey(key), key.slice(-4));
   // Shown once, on this page; only its hash is kept.
   res.set('Cache-Control', 'no-store');
-  res.send(V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req), vault: vaultView(req.user), fresh: { name, key, url: mcpUrl(req, key) } }));
+  res.send(connectWith(req, { fresh: { name, key, url: mcpUrl(req, key) } }));
 });
 app.post('/connect/keys/:kid/delete', requireUser, (req, res) => {
   db.prepare('DELETE FROM api_keys WHERE id = ? AND user_id = ?').run(req.params.kid, req.user.id);
@@ -829,7 +832,8 @@ app.post('/connect/keys/:kid/delete', requireUser, (req, res) => {
 // The creator's own storage platform. They paste its address and a read-only access key made there;
 // then each delivery page has "Add from Vault", which copies the picked files in server to server.
 const vaultView = (user) => (vault.connected(user) ? { address: user.vault_url, email: user.vault_email } : null);
-const connectWith = (req, extra) => V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req), vault: vaultView(req.user), ...extra });
+const googleView = (user) => (gdrive.enabled ? { connected: gdrive.connected(user), email: user.gdrive_email } : null);
+const connectWith = (req, extra) => V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req), vault: vaultView(req.user), google: googleView(req.user), ...extra });
 
 app.post('/connect/vault', requireUser, async (req, res) => {
   const address = vault.cleanAddress(req.body.address);
@@ -877,7 +881,8 @@ app.get('/vault/thumb/:fileId', requireUser, needVault, async (req, res) => {
 
 // Copies run one file at a time per delivery, in the background, so a 650 MB video doesn't hold a
 // request open. The page polls for progress. Kept in memory: a restart drops copies not yet done.
-const vaultJobs = new Map(); // project id -> { items: [{ key, vaultId, name, size, state, error }], running }
+// The same queue copies files an AI assistant picked from the creator's Google Drive (src/mcp.js).
+const vaultJobs = new Map(); // project id -> { items: [{ key, from, vaultId | driveId, name, size, state, error }], running }
 const jobView = (job) => ({ ok: true, running: !!(job && job.running),
   items: job ? job.items.map(({ key, name, size, state, error }) => ({ key, name, size, state, error })) : [] });
 
@@ -890,15 +895,26 @@ async function runVaultJob(projectId) {
       item.state = 'copying';
       const p = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId);
       const owner = p && db.prepare('SELECT * FROM users WHERE id = ?').get(p.user_id);
-      const src = owner && vault.source(owner, item.vaultId);
-      if (!src) { item.state = 'failed'; item.error = p ? 'Your Vault isn’t connected any more.' : 'The delivery was deleted.'; continue; }
+      const drive = item.from === 'drive';
+      let src = null;
       try {
-        const f = await importFile(billing.view(owner), p, src.url, { headers: src.headers, folder: item.folder });
+        src = !owner ? null : drive ? (gdrive.connected(owner) ? await gdrive.source(owner, item.driveId) : null) : vault.source(owner, item.vaultId);
+      } catch (e) { item.state = 'failed'; item.error = e.message; continue; }
+      if (!src) {
+        item.state = 'failed';
+        item.error = !p ? 'The delivery was deleted.' : drive ? 'Google Drive isn’t connected any more.' : 'Your Vault isn’t connected any more.';
+        continue;
+      }
+      try {
+        // Drive downloads don't carry the file's name, so the name picked earlier is used.
+        const f = await importFile(billing.view(owner), p, src.url, { headers: src.headers, folder: item.folder, filename: drive ? item.name : undefined });
         item.state = 'done';
         item.name = f.name;
+        item.fileId = f.id;
       } catch (e) {
         item.state = 'failed';
-        item.error = /HTTP 401/.test(e.message) ? 'Your Vault key was removed or is wrong. Connect your Vault again.' : e.message;
+        item.error = !/HTTP 401/.test(e.message) ? e.message
+          : drive ? gdrive.RECONNECT : 'Your Vault key was removed or is wrong. Connect your Vault again.';
       }
     }
   } finally {
@@ -931,6 +947,55 @@ app.post('/projects/:id/vault', requireUser, ownProject, needVault, express.json
   }
   runVaultJob(req.project.id).catch((e) => console.error('vault import', e));
   res.json(jobView(job));
+});
+
+// Queue files for the background copy from outside a browser request (the AI assistant's tools).
+// items: [{ from: 'drive', driveId, name, size } | { from: 'vault', vaultId, name, size }].
+function queueImport(projectId, items, folder) {
+  let job = vaultJobs.get(projectId);
+  if (!job || (!job.running && !job.items.some((i) => i.state === 'waiting'))) vaultJobs.set(projectId, (job = { items: [] }));
+  for (const it of items) {
+    job.items.push({ key: token(6), from: it.from, vaultId: it.vaultId, driveId: it.driveId, name: String(it.name || 'file').slice(0, 255),
+      size: Number(it.size) || 0, folder: folder || null, state: 'waiting', error: null });
+  }
+  runVaultJob(projectId).catch((e) => console.error('import', e));
+  return job;
+}
+const importStatus = (projectId) => {
+  const job = vaultJobs.get(projectId);
+  return { running: !!(job && job.running), items: job ? job.items.map(({ name, size, folder, state, error, fileId }) => ({ name, size, folder, state, error, file_id: fileId || null })) : [] };
+};
+
+// ---------- creator: Google Drive ----------
+// Google sign-in with read-only Drive access, so an AI assistant can copy files from the creator's
+// Drive into a delivery without the files being shared publicly. Only the refresh token is kept.
+const googleRedirect = (req) => `${originOf(req)}/connect/google/callback`;
+const needGoogle = (req, res, next) => (gdrive.enabled ? next()
+  : res.status(404).send(V.messagePage('Not set up', 'Google Drive isn’t set up on this server yet.')));
+app.post('/connect/google', requireUser, needGoogle, (req, res) => {
+  const state = token(18);
+  res.cookie('cf_gstate', state, { ...cookieOpts, signed: true, maxAge: 10 * 60 * 1000 });
+  res.redirect(gdrive.authUrl(googleRedirect(req), state));
+});
+app.get('/connect/google/callback', requireUser, needGoogle, async (req, res) => {
+  const state = req.signedCookies.cf_gstate;
+  res.clearCookie('cf_gstate', cookieOpts);
+  if (req.query.error) return res.redirect('/connect?google=cancelled#google');
+  if (!state || state !== req.query.state || !req.query.code)
+    return res.status(400).send(connectWith(req, { googleError: 'That sign-in link expired. Choose Connect Google Drive again.' }));
+  try {
+    const { refresh, email } = await gdrive.finish(String(req.query.code), googleRedirect(req));
+    if (req.user.gdrive_refresh && req.user.gdrive_refresh !== refresh) gdrive.revoke(req.user.gdrive_refresh);
+    db.prepare('UPDATE users SET gdrive_refresh = ?, gdrive_email = ? WHERE id = ?').run(refresh, email || null, req.user.id);
+    res.redirect('/connect?google=connected#google');
+  } catch (e) {
+    res.status(400).send(connectWith(req, { googleError: e.message }));
+  }
+});
+app.post('/connect/google/remove', requireUser, (req, res) => {
+  if (req.user.gdrive_refresh) gdrive.revoke(req.user.gdrive_refresh);
+  db.prepare('UPDATE users SET gdrive_refresh = NULL, gdrive_email = NULL WHERE id = ?').run(req.user.id);
+  res.redirect('/connect#google');
 });
 
 // ---------- creator: profile ----------
@@ -1090,6 +1155,7 @@ const importFile = makeImporter({ db, token, storage, kindOf, makeThumb, insertA
 
 app.use('/mcp', mcpRouter({
   db, token, TYPES: V.TYPES, deleteDelivery, removeAssetFiles, importFile, usage, originOf, fmtSize: V.fmtSize, userView: billing.view,
+  gdrive, vault, queueImport, importStatus, spaceProblem, cleanFolder,
 }));
 
 // ---------- client: delivery ----------

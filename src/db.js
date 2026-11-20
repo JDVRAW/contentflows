@@ -116,6 +116,9 @@ for (const [name, type] of [['plan', "TEXT NOT NULL DEFAULT 'free'"], ['plan_int
   ['vault_url', 'TEXT'], ['vault_key', 'TEXT'], ['vault_email', 'TEXT'],
   // Set when the creator closes the "New: Add from Vault" card on their dashboard, so it stays closed.
   ['vault_promo_hidden', 'INTEGER'],
+  // The creator's Google Drive, connected under Connect with Google sign-in (read-only): the refresh
+  // token that lets ContentFlows copy files from it, and the Google account's email (shown to them).
+  ['gdrive_refresh', 'TEXT'], ['gdrive_email', 'TEXT'],
   // The creator's profile on their Deliveries page: a round profile photo, a wide header photo (files
   // under DATA_DIR/brand, like logos) and a short line about them.
   ['avatar', 'TEXT'], ['header_photo', 'TEXT'], ['bio', 'TEXT']]) {

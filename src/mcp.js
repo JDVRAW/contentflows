@@ -17,7 +17,7 @@ const newKey = () => KEY_PREFIX + crypto.randomBytes(32).toString('base64url');
 // ctx: what the tools need from server.js (database, storage, plan checks, helpers).
 function mcpRouter(ctx) {
   const { db, token, TYPES, deleteDelivery, removeAssetFiles, importFile,
-    usage, originOf, fmtSize, userView } = ctx;
+    usage, originOf, fmtSize, userView, gdrive, vault, queueImport, importStatus, spaceProblem, cleanFolder } = ctx;
   const router = express.Router();
 
   const findKey = db.prepare('SELECT k.id AS key_id, u.* FROM api_keys k JOIN users u ON u.id = k.user_id WHERE k.key_hash = ?');
@@ -59,7 +59,12 @@ function mcpRouter(ctx) {
       instructions: 'ContentFlows delivers final photoshoots, films and commercials to clients through one private link. '
         + 'A "delivery" is one project for one client: its files, a share link, and settings (password, expiry, downloads). '
         + 'Auto-delete is off unless turned on: then the delivery and its files are deleted auto_delete_days after the client first downloads anything (deletes_on). '
-        + 'Typical flow: create_delivery, add_file_from_url for each file, then give the user the share link from the result. '
+        + 'Typical flow: create_delivery, add files, then give the user the share link from the result. '
+        + 'Adding files: for files in the user\'s Google Drive (private or shared), use add_files_from_google_drive with the Drive links or file ids, '
+        + 'even when they are not public; it works once the user has connected Google Drive in ContentFlows (Connect AI). '
+        + 'For the user\'s Vault use browse_vault and add_files_from_vault. For any other public link use add_file_from_url. '
+        + 'Drive and Vault copies run in the background: check them with get_import_status before saying they are done. '
+        + 'Before adding, look at get_delivery so files that are already there are not added twice. '
         + 'Always show the share link exactly as returned. Before remove_file, new_share_link or delete_delivery, confirm with the user.',
     });
     const link = (p) => `${origin}/d/${p.share_token}`;
@@ -117,7 +122,7 @@ function mcpRouter(ctx) {
 
     server.registerTool('create_delivery', {
       title: 'Create a delivery',
-      description: 'Create a new delivery for a client. Returns its id and share link. Add files next with add_file_from_url.',
+      description: 'Create a new delivery for a client. Returns its id and share link. Add files next with add_files_from_google_drive, add_files_from_vault or add_file_from_url.',
       inputSchema: {
         title: z.string().min(1).max(200).describe('e.g. "Ana & Luis wedding — finals"'),
         type: typeEnum.optional().describe(`One of: ${Object.entries(TYPES).map(([k, v]) => `${k} (${v})`).join(', ')}. Default project`),
@@ -181,7 +186,8 @@ function mcpRouter(ctx) {
     server.registerTool('add_file_from_url', {
       title: 'Add a file from a link',
       description: 'Download a file from a public link and add it to a delivery. Works with direct download links and with Dropbox and '
-        + 'Google Drive share links (the file must be shared as "anyone with the link"). Thumbnails are made for photos and videos. '
+        + 'Google Drive share links. A Drive link is opened with the user\'s connected Google Drive when there is one, so it doesn\'t need to be public '
+        + '(for several Drive files, or a Drive folder, use add_files_from_google_drive instead). Thumbnails are made for photos and videos. '
         + 'Big videos can take a while; for very large files suggest uploading in the ContentFlows app instead.',
       inputSchema: {
         delivery_id: z.number().int(),
@@ -193,11 +199,140 @@ function mcpRouter(ctx) {
       const p = own(delivery_id);
       if (!p) return fail(`No delivery with id ${delivery_id}.`);
       try {
-        const f = await importFile(user, p, url, { filename });
+        let src = { url };
+        if (gdrive.isDriveLink(url) && gdrive.connected(user)) {
+          const m = await gdrive.meta(user, gdrive.idOf(url));
+          if (m.folder) return fail('That is a Google Drive folder. Use add_files_from_google_drive to add what is inside it.');
+          if (gdrive.isNative(m)) return fail(`"${m.name}" is a Google Docs, Sheets or Slides file, which can't be added as it is. Export it as a PDF or other file first.`);
+          src = { ...(await gdrive.source(user, m.id)) };
+          filename = filename || m.name;
+        }
+        const f = await importFile(user, p, src.url, { filename, headers: src.headers });
         return ok({ file: { id: f.id, name: f.name, kind: f.kind, size: fmtSize(f.size) }, delivery: summary(own(p.id)) });
       } catch (e) {
         return fail(e.message);
       }
+    });
+
+    const queued = (p, items, folder, extra = {}) => {
+      const job = queueImport(p.id, items, folder);
+      return ok({ ...extra, queued: items.map((i) => ({ name: i.name, size: fmtSize(i.size) })), folder: folder || null,
+        status: 'Copying in the background, one file at a time. Big videos take a few minutes each. Call get_import_status to see when they are done.',
+        in_progress: job.items.filter((i) => i.state === 'waiting' || i.state === 'copying').length, delivery_id: p.id });
+    };
+    const roomFor = (items) => spaceProblem(user, items.reduce((n, i) => n + (i.size || 0), 0));
+
+    server.registerTool('add_files_from_google_drive', {
+      title: 'Add files from Google Drive',
+      description: 'Copy files from the user\'s own Google Drive into a delivery, server to server, at full quality. The files do NOT need to be shared '
+        + 'publicly: ContentFlows reads them with the Google Drive the user connected under Connect AI. Pass Drive share links, '
+        + 'file ids, or a folder link/id (adds the files directly inside that folder; subfolders are listed but not added). '
+        + 'Returns right away while the copies run in the background; check progress with get_import_status. '
+        + 'If Google Drive is not connected, the answer says where the user connects it.',
+      inputSchema: {
+        delivery_id: z.number().int(),
+        files: z.array(z.string().min(1).max(500)).min(1).max(200).describe('Google Drive links or ids of files or folders'),
+        folder: z.string().max(300).optional().describe('Delivery folder to put them in, like "Reels" or "Photos/Selects". Default: the top level'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    }, async ({ delivery_id, files, folder }) => {
+      const p = own(delivery_id);
+      if (!p) return fail(`No delivery with id ${delivery_id}.`);
+      if (!gdrive.enabled) return fail('Google Drive isn\'t set up on this ContentFlows server yet. Share the files as "anyone with the link" and use add_file_from_url, or upload them in the app.');
+      if (!gdrive.connected(user)) return fail(`Google Drive isn't connected to ContentFlows yet. Ask the user to open ${origin}/connect#google and choose Connect Google Drive (one time), then try again.`);
+      const items = [], skipped = [];
+      try {
+        for (const raw of files) {
+          const id = gdrive.idOf(raw);
+          if (!id) { skipped.push({ file: raw, reason: 'Not a Google Drive link or id' }); continue; }
+          let m;
+          try { m = await gdrive.meta(user, id); } catch (e) {
+            if (e.reconnect) throw e;
+            skipped.push({ file: raw, reason: e.message }); continue;
+          }
+          const inside = m.folder ? await gdrive.list(user, m.id) : [m];
+          for (const f of inside) {
+            if (f.folder) skipped.push({ file: f.name, reason: 'Subfolder: pass its link to add what is inside it' });
+            else if (gdrive.isNative(f)) skipped.push({ file: f.name, reason: 'Google Docs, Sheets and Slides files can\'t be added; export them first' });
+            else if (!items.some((i) => i.driveId === f.id)) items.push({ from: 'drive', driveId: f.id, name: f.name, size: f.size });
+          }
+        }
+      } catch (e) {
+        return fail(e.message);
+      }
+      if (!items.length) return fail(`Nothing to add.${skipped.length ? ` ${JSON.stringify(skipped)}` : ''}`);
+      const full = roomFor(items);
+      if (full) return fail(`${full} Upgrade at ${origin}/pricing`);
+      return queued(p, items, cleanFolder(folder), skipped.length ? { skipped } : {});
+    });
+
+    server.registerTool('search_google_drive', {
+      title: 'Find files in Google Drive',
+      description: 'Search the user\'s connected Google Drive by name (files and folders), or list a folder\'s contents with folder. '
+        + 'Returns ids to pass to add_files_from_google_drive.',
+      inputSchema: {
+        name: z.string().min(1).max(200).optional().describe('Text in the file or folder name, like "Zenaida"'),
+        folder: z.string().max(500).optional().describe('A Drive folder link or id: list what is inside it instead of searching'),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    }, async ({ name, folder }) => {
+      if (!gdrive.connected(user)) return fail(gdrive.enabled ? `Google Drive isn't connected to ContentFlows yet. Ask the user to open ${origin}/connect#google and choose Connect Google Drive.` : 'Google Drive isn\'t set up on this ContentFlows server yet.');
+      if (!name && !folder) return fail('Pass name or folder.');
+      try {
+        const id = folder && gdrive.idOf(folder);
+        if (folder && !id) return fail('That is not a Google Drive folder link or id.');
+        const found = id ? await gdrive.list(user, id) : await gdrive.search(user, name);
+        return ok({ files: found.map((f) => ({ id: f.id, name: f.name, folder: f.folder, type: f.mimeType, size: f.folder ? null : fmtSize(f.size), modified: f.modified })) });
+      } catch (e) { return fail(e.message); }
+    });
+
+    server.registerTool('browse_vault', {
+      title: 'Browse the Vault',
+      description: 'List one folder of the user\'s Vault (their ContentFlows storage platform): its subfolders and files with ids. '
+        + 'Leave folder_id out for the top level. Use the file ids with add_files_from_vault.',
+      inputSchema: { folder_id: z.string().max(64).optional() },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    }, async ({ folder_id }) => {
+      if (!vault.connected(user)) return fail(`The Vault isn't connected. Ask the user to connect it at ${origin}/connect#vault.`);
+      try {
+        const r = await vault.browse(user, folder_id || null);
+        return ok({ path: r.path || [], folders: r.folders || [], files: r.files || [] });
+      } catch (e) { return fail(e.message); }
+    });
+
+    server.registerTool('add_files_from_vault', {
+      title: 'Add files from the Vault',
+      description: 'Copy files from the user\'s Vault into a delivery, server to server, at full quality. Get the file ids from browse_vault. '
+        + 'Returns right away while the copies run in the background; check progress with get_import_status.',
+      inputSchema: {
+        delivery_id: z.number().int(),
+        files: z.array(z.object({ id: z.string().regex(/^[\w-]{1,64}$/), name: z.string().max(255).optional(), size: z.number().optional() }))
+          .min(1).max(500).describe('Files from browse_vault: their id, and name and size when known'),
+        folder: z.string().max(300).optional().describe('Delivery folder to put them in. Default: the top level'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    }, async ({ delivery_id, files, folder }) => {
+      const p = own(delivery_id);
+      if (!p) return fail(`No delivery with id ${delivery_id}.`);
+      if (!vault.connected(user)) return fail(`The Vault isn't connected. Ask the user to connect it at ${origin}/connect#vault.`);
+      const items = files.map((f) => ({ from: 'vault', vaultId: f.id, name: f.name || 'file', size: f.size || 0 }));
+      const full = roomFor(items);
+      if (full) return fail(`${full} Upgrade at ${origin}/pricing`);
+      return queued(p, items, cleanFolder(folder));
+    });
+
+    server.registerTool('get_import_status', {
+      title: 'Check background copies',
+      description: 'Progress of files being copied into a delivery from Google Drive or the Vault: each file is waiting, copying, done or failed (with the reason).',
+      inputSchema: { delivery_id: z.number().int() },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    }, async ({ delivery_id }) => {
+      const p = own(delivery_id);
+      if (!p) return fail(`No delivery with id ${delivery_id}.`);
+      const st = importStatus(p.id);
+      const count = (s) => st.items.filter((i) => i.state === s).length;
+      return ok({ delivery_id: p.id, running: st.running, done: count('done'), copying: count('copying'), waiting: count('waiting'), failed: count('failed'),
+        files: st.items.map((i) => ({ ...i, size: fmtSize(i.size) })), share_link: link(p) });
     });
 
     server.registerTool('set_cover', {
