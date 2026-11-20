@@ -692,7 +692,6 @@ app.post('/projects/:id/upload', requireUser, ownProject, checkSpace, upload.arr
 // and is kept in memory: a restart voids links not used yet.
 const UPLOAD_LINK_HOURS = 24;
 const uploadLinks = new Map(); // token -> { userId, projectId, name, folder, until }
-setInterval(() => { const now = Date.now(); for (const [t, l] of uploadLinks) if (l.until < now) uploadLinks.delete(t); }, 3600e3).unref();
 function makeUploadLink(user, p, { name, folder }) {
   const t = token(24);
   uploadLinks.set(t, { userId: user.id, projectId: p.id, name: name || null, folder: folder || null, until: Date.now() + UPLOAD_LINK_HOURS * 3600e3 });
@@ -704,46 +703,93 @@ const TYPE_BY_EXT = { '.mp4': 'video/mp4', '.m4v': 'video/x-m4v', '.mov': 'video
   '.tif': 'image/tiff', '.tiff': 'image/tiff', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.aac': 'audio/aac',
   '.flac': 'audio/flac', '.pdf': 'application/pdf', '.zip': 'application/zip' };
 
+// Big files go in parts: Cloudflare in front of the site refuses any request body over 100 MB, so
+// the assistant splits the file (split -b 90m) and PUTs each piece with ?part=N&parts=M, in order.
+// Pieces are appended to one file on disk; after the last one it is stored like any other upload.
+// A failed piece can be sent again; a piece that already arrived is answered as done.
+const PART_MAX = 99 * 1000 * 1000;
+const PART_HINT = 'Files over 90 MB must go in parts: split -b 90m <file> and PUT each piece in order to <link>?part=N&parts=TOTAL.';
+function dropParts(link) { if (link && link.partial) { fs.rm(link.partial.tmp, { force: true }, () => {}); link.partial = null; } }
+setInterval(() => { const now = Date.now(); for (const [t, l] of uploadLinks) if (l.until < now) { dropParts(l); uploadLinks.delete(t); } }, 3600e3).unref();
+
 async function receiveUpload(req, res) {
-  const link = uploadLinks.get(req.params.t);
+  const t = req.params.t;
+  const link = uploadLinks.get(t);
   const answer = (status, body) => { req.resume(); res.status(status).json(body); };
   if (!link || link.until < Date.now()) return answer(404, { ok: false, error: 'This upload link is unknown, used or expired. Ask for a new one.' });
   const p = db.prepare('SELECT * FROM projects WHERE id = ?').get(link.projectId);
   const row = p && db.prepare('SELECT * FROM users WHERE id = ? AND id = ?').get(link.userId, p.user_id);
-  if (!row) { uploadLinks.delete(req.params.t); return answer(404, { ok: false, error: 'The delivery for this link was deleted.' }); }
+  if (!row) { dropParts(link); uploadLinks.delete(t); return answer(404, { ok: false, error: 'The delivery for this link was deleted.' }); }
   const user = billing.view(row);
-  const declared = Number(req.headers['content-length']);
   const max = Math.min(MAX_UPLOAD, spaceLeft(user));
-  if (Number.isFinite(declared) && declared > max)
-    return answer(413, { ok: false, error: spaceProblem(user, declared) || `That file is over the ${LIMIT_TEXT} limit per file.` });
-  uploadLinks.delete(req.params.t); // one file per link
+  const declared = Number(req.headers['content-length']);
+  const tooBig = (n) => spaceProblem(user, n) || `That file is over the ${LIMIT_TEXT} limit per file.`;
+
+  // Which piece this is, when the file comes in parts.
+  const hasPart = req.query.part !== undefined || req.query.parts !== undefined;
+  const part = Number(req.query.part), parts = Number(req.query.parts);
+  if (hasPart && !(Number.isInteger(part) && Number.isInteger(parts) && part >= 1 && parts >= 1 && part <= parts && parts <= 10000))
+    return answer(400, { ok: false, error: 'part and parts must be whole numbers with 1 <= part <= parts.' });
+  if (link.busy) return answer(409, { ok: false, error: 'Another upload on this link is still running. Wait for it to finish.' });
+  let st = link.partial;
+  if (hasPart) {
+    if (st && st.parts !== parts) return answer(409, { ok: false, error: `This upload was started with parts=${st.parts}. Keep sending that, or ask for a new link.` });
+    const got = st ? st.got : 0;
+    if (part <= got) return answer(200, { ok: true, part, parts, received: got, note: 'That part already arrived.' });
+    if (part !== got + 1) return answer(409, { ok: false, error: `Send part ${got + 1} next.`, next_part: got + 1 });
+    if (Number.isFinite(declared) && declared > PART_MAX) return answer(413, { ok: false, error: `Each part must be under ${PART_MAX / 1e6} MB. Split with split -b 90m.` });
+  } else if (st) {
+    return answer(409, { ok: false, error: `This link is partway through a ${st.parts}-part upload. Send part ${st.got + 1} next.`, next_part: st.got + 1 });
+  }
+  const before = st ? st.bytes : 0;
+  if (Number.isFinite(declared) && before + declared > max) return answer(413, { ok: false, error: tooBig(before + declared) });
+
   const name = String(req.query.name || link.name || 'file').slice(0, 255);
   let type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
   if (!type || type === 'application/octet-stream' || type === 'application/x-www-form-urlencoded') type = TYPE_BY_EXT[path.extname(name).toLowerCase()] || 'application/octet-stream';
   const dir = path.join(UPLOADS, String(p.id));
   fs.mkdirSync(dir, { recursive: true });
-  const tmp = path.join(dir, `${token(12)}.part`);
+  if (!st) {
+    st = { tmp: path.join(dir, `${token(12)}.part`), got: 0, bytes: 0, parts: hasPart ? parts : 1 };
+    if (hasPart) link.partial = st;
+  }
+  const last = !hasPart || part === parts;
   const hold = `link:${token(9)}`;
-  reserved.set(hold, { userId: user.id, size: Number.isFinite(declared) ? declared : max, at: Date.now() });
+  reserved.set(hold, { userId: user.id, size: Number.isFinite(declared) ? before + declared : max, at: Date.now() });
+  link.busy = true;
   let size = 0;
+  let stored = false;
   try {
     await new Promise((resolve, reject) => {
-      const out = fs.createWriteStream(tmp, { flags: 'wx' });
-      req.on('data', (c) => { size += c.length; if (size > max) req.destroy(Object.assign(new Error('too big'), { code: 'ETOOBIG' })); });
+      const out = fs.createWriteStream(st.tmp, { flags: before ? 'r+' : 'w', start: before });
+      req.on('data', (c) => {
+        size += c.length;
+        if (before + size > max) req.destroy(Object.assign(new Error('too big'), { code: 'ETOOBIG' }));
+        else if (hasPart && size > PART_MAX) req.destroy(Object.assign(new Error('part too big'), { code: 'EPARTBIG' }));
+      });
       pipeline(req, out, (e) => (e ? reject(e) : resolve()));
     });
     if (!size) throw Object.assign(new Error('empty'), { code: 'EEMPTY' });
-    const f = await importFile.store(p, tmp, { name, type, size, folder: link.folder });
+    if (Number.isFinite(declared) && size !== declared) throw Object.assign(new Error(`got ${size} of ${declared} bytes`), { code: 'ESHORT' });
+    st.got += 1; st.bytes = before + size;
+    if (!last) return res.json({ ok: true, part, parts, received: st.got, next_part: st.got + 1 });
+    uploadLinks.delete(t); // one file per link
+    const f = await importFile.store(p, st.tmp, { name, type, size: st.bytes, folder: link.folder });
+    stored = true;
     res.json({ ok: true, file: { id: f.id, name: f.name, kind: f.kind, size: V.fmtSize(f.size) }, delivery: `${originOf(req)}/d/${p.share_token}` });
   } catch (e) {
-    // The link stays usable after a failed or cut-off upload.
-    uploadLinks.set(req.params.t, link);
-    if (e.code === 'ETOOBIG') return res.status(413).json({ ok: false, error: spaceProblem(user, size) || `That file is over the ${LIMIT_TEXT} limit per file.` });
+    // The link stays usable after a failed or cut-off upload; a part can be sent again.
+    if (st.got === (hasPart ? part : 1)) st.got -= 1; // the store step failed after the last part landed
+    fs.truncate(st.tmp, before, () => {});
+    uploadLinks.set(t, link);
+    if (e.code === 'ETOOBIG') return res.status(413).json({ ok: false, error: tooBig(before + size) });
+    if (e.code === 'EPARTBIG') return res.status(413).json({ ok: false, error: `Each part must be under ${PART_MAX / 1e6} MB. Split with split -b 90m.` });
     if (e.code === 'EEMPTY') return res.status(400).json({ ok: false, error: 'No file arrived. Send it with curl -T <file> <link>.' });
-    if (!res.headersSent) res.status(e.friendly ? 500 : 400).json({ ok: false, error: e.friendly ? e.message : `The upload was cut off: ${e.message}` });
+    if (!res.headersSent) res.status(e.friendly ? 500 : 400).json({ ok: false, error: e.friendly ? e.message : `The upload was cut off: ${e.message}. Send ${hasPart ? `part ${part}` : 'it'} again.` });
   } finally {
+    link.busy = false;
     reserved.delete(hold);
-    fs.rm(tmp, { force: true }, () => {});
+    if (last && (stored || !hasPart)) { fs.rm(st.tmp, { force: true }, () => {}); if (link.partial === st) link.partial = null; }
   }
 }
 app.put('/up/:t', receiveUpload);
