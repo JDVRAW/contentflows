@@ -1029,6 +1029,7 @@ function connectPage({ user, keys, origin, fresh, error, vault, vaultError, vaul
     <ul class="muted">
       <li>"Create a photoshoot delivery for Ana López, add the photos from this Dropbox link, and give me the link."</li>
       <li>"Add the videos in my Drive folder &quot;Finals&quot; to Ana's delivery, in a folder called Reels." (connect Google Drive above first)</li>
+      <li>"Upload the videos in my Desktop folder Finals to Ana's delivery." (in Claude Desktop with folder access, or Claude Code: Claude sends them from your computer straight to the delivery)</li>
       <li>"Put a password on the Nike commercial delivery and make it expire at the end of the month."</li>
       <li>"Which deliveries haven't been downloaded yet?"</li>
     </ul>

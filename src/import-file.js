@@ -9,7 +9,7 @@ function makeImporter({ db, token, storage, kindOf, makeThumb, insertAsset, spac
   const fail = (message) => Object.assign(new Error(message), { friendly: true });
   // Resolves to { id, name, kind, size }. Rejects with an Error whose message can be shown to the creator.
   // headers: sent with the download (only to the link's own site). folder: "BTS" or "BTS/Raw", or null.
-  return async function importFile(user, p, url, { filename, headers, folder } = {}) {
+  async function importFile(user, p, url, { filename, headers, folder } = {}) {
     const full = spaceProblem(user, 1);
     if (full) throw fail(full);
     const dir = path.join(UPLOADS, String(p.id));
@@ -34,30 +34,44 @@ function makeImporter({ db, token, storage, kindOf, makeThumb, insertAsset, spac
       throw fail(`Couldn't get the file: ${e.message}`);
     }
     try {
-      const name = String(filename || got.name || 'file').replace(/[\\/\x00-\x1f]/g, '_').slice(0, 255) || 'file';
-      const kind = kindOf(got.type || '', name);
+      return await store(p, tmp, { name: filename || got.name, type: got.type, size: got.size, folder });
+    } finally {
+      reserved.delete(hold);
+      fs.rm(tmp, { force: true }, () => {});
+    }
+  }
+
+  // Saves a file already on this server's disk (tmp) into a delivery: into cloud storage when it's
+  // set up, otherwise next to the delivery's other files, then makes a thumbnail. The caller removes
+  // tmp afterwards (it may already have been moved). Resolves to { id, name, kind, size }.
+  async function store(p, tmp, { name: raw, type, size, folder }) {
+    try {
+      const dir = path.join(UPLOADS, String(p.id));
+      fs.mkdirSync(dir, { recursive: true });
+      const name = String(raw || 'file').replace(/[\\/\x00-\x1f]/g, '_').slice(0, 255) || 'file';
+      const kind = kindOf(type || '', name);
       const ext = path.extname(name).toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 12);
       let stored, where = null;
       if (storage.enabled) {
         stored = `projects/${p.id}/${token(12)}${ext}`;
-        await storage.putFile(stored, tmp, got.type);
+        await storage.putFile(stored, tmp, type);
         where = 's3';
       } else {
         stored = token(12) + ext;
         fs.renameSync(tmp, path.join(dir, stored));
       }
-      const r = insertAsset.run(p.id, name, stored, got.type, got.size, kind, where, p.id);
+      const r = insertAsset.run(p.id, name, stored, type, size, kind, where, p.id);
       if (folder) db.prepare('UPDATE assets SET folder = ? WHERE id = ?').run(folder, r.lastInsertRowid);
       const thumb = await makeThumb(where ? tmp : path.join(dir, stored), kind, r.lastInsertRowid);
       if (thumb) db.prepare('UPDATE assets SET thumb_name = ? WHERE id = ?').run(thumb, r.lastInsertRowid);
-      return { id: Number(r.lastInsertRowid), name, kind, size: got.size };
+      return { id: Number(r.lastInsertRowid), name, kind, size };
     } catch (e) {
-      throw fail(`The file downloaded but couldn't be saved: ${e.message}`);
-    } finally {
-      reserved.delete(hold);
-      fs.rm(tmp, { force: true }, () => {});
+      throw fail(`The file arrived but couldn't be saved: ${e.message}`);
     }
-  };
+  }
+
+  importFile.store = store;
+  return importFile;
 }
 
 module.exports = { makeImporter };

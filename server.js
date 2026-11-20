@@ -684,6 +684,71 @@ app.post('/projects/:id/upload', requireUser, ownProject, checkSpace, upload.arr
   res.json({ ok: true, files: out });
 });
 
+// ---------- upload links (for AI assistants on the creator's computer) ----------
+// The assistant's create_upload_links tool makes one link per file (src/mcp.js). An assistant that
+// can run commands on the creator's computer (Claude Desktop with folder access, Claude Code…)
+// sends the file to it with `curl -T <file> <link>`, so videos go from the computer straight into
+// the delivery without being shared anywhere first. Each link takes one file, works for 24 hours,
+// and is kept in memory: a restart voids links not used yet.
+const UPLOAD_LINK_HOURS = 24;
+const uploadLinks = new Map(); // token -> { userId, projectId, name, folder, until }
+setInterval(() => { const now = Date.now(); for (const [t, l] of uploadLinks) if (l.until < now) uploadLinks.delete(t); }, 3600e3).unref();
+function makeUploadLink(user, p, { name, folder }) {
+  const t = token(24);
+  uploadLinks.set(t, { userId: user.id, projectId: p.id, name: name || null, folder: folder || null, until: Date.now() + UPLOAD_LINK_HOURS * 3600e3 });
+  return { token: t, expires_at: new Date(Date.now() + UPLOAD_LINK_HOURS * 3600e3).toISOString() };
+}
+// Types for files sent without one (curl -T sends none), so videos and photos still play in the browser.
+const TYPE_BY_EXT = { '.mp4': 'video/mp4', '.m4v': 'video/x-m4v', '.mov': 'video/quicktime', '.webm': 'video/webm', '.mkv': 'video/x-matroska',
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif', '.heic': 'image/heic',
+  '.tif': 'image/tiff', '.tiff': 'image/tiff', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.aac': 'audio/aac',
+  '.flac': 'audio/flac', '.pdf': 'application/pdf', '.zip': 'application/zip' };
+
+async function receiveUpload(req, res) {
+  const link = uploadLinks.get(req.params.t);
+  const answer = (status, body) => { req.resume(); res.status(status).json(body); };
+  if (!link || link.until < Date.now()) return answer(404, { ok: false, error: 'This upload link is unknown, used or expired. Ask for a new one.' });
+  const p = db.prepare('SELECT * FROM projects WHERE id = ?').get(link.projectId);
+  const row = p && db.prepare('SELECT * FROM users WHERE id = ? AND id = ?').get(link.userId, p.user_id);
+  if (!row) { uploadLinks.delete(req.params.t); return answer(404, { ok: false, error: 'The delivery for this link was deleted.' }); }
+  const user = billing.view(row);
+  const declared = Number(req.headers['content-length']);
+  const max = Math.min(MAX_UPLOAD, spaceLeft(user));
+  if (Number.isFinite(declared) && declared > max)
+    return answer(413, { ok: false, error: spaceProblem(user, declared) || `That file is over the ${LIMIT_TEXT} limit per file.` });
+  uploadLinks.delete(req.params.t); // one file per link
+  const name = String(req.query.name || link.name || 'file').slice(0, 255);
+  let type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  if (!type || type === 'application/octet-stream' || type === 'application/x-www-form-urlencoded') type = TYPE_BY_EXT[path.extname(name).toLowerCase()] || 'application/octet-stream';
+  const dir = path.join(UPLOADS, String(p.id));
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, `${token(12)}.part`);
+  const hold = `link:${token(9)}`;
+  reserved.set(hold, { userId: user.id, size: Number.isFinite(declared) ? declared : max, at: Date.now() });
+  let size = 0;
+  try {
+    await new Promise((resolve, reject) => {
+      const out = fs.createWriteStream(tmp, { flags: 'wx' });
+      req.on('data', (c) => { size += c.length; if (size > max) req.destroy(Object.assign(new Error('too big'), { code: 'ETOOBIG' })); });
+      pipeline(req, out, (e) => (e ? reject(e) : resolve()));
+    });
+    if (!size) throw Object.assign(new Error('empty'), { code: 'EEMPTY' });
+    const f = await importFile.store(p, tmp, { name, type, size, folder: link.folder });
+    res.json({ ok: true, file: { id: f.id, name: f.name, kind: f.kind, size: V.fmtSize(f.size) }, delivery: `${originOf(req)}/d/${p.share_token}` });
+  } catch (e) {
+    // The link stays usable after a failed or cut-off upload.
+    uploadLinks.set(req.params.t, link);
+    if (e.code === 'ETOOBIG') return res.status(413).json({ ok: false, error: spaceProblem(user, size) || `That file is over the ${LIMIT_TEXT} limit per file.` });
+    if (e.code === 'EEMPTY') return res.status(400).json({ ok: false, error: 'No file arrived. Send it with curl -T <file> <link>.' });
+    if (!res.headersSent) res.status(e.friendly ? 500 : 400).json({ ok: false, error: e.friendly ? e.message : `The upload was cut off: ${e.message}` });
+  } finally {
+    reserved.delete(hold);
+    fs.rm(tmp, { force: true }, () => {});
+  }
+}
+app.put('/up/:t', receiveUpload);
+app.post('/up/:t', receiveUpload);
+
 // ---------- thumbnails for files in object storage ----------
 // ffmpeg reads the file through this loopback-only relay, which fetches just the byte ranges it asks
 // for from the bucket with the same client the rest of the app uses. That way ffmpeg never makes
@@ -1156,6 +1221,7 @@ const importFile = makeImporter({ db, token, storage, kindOf, makeThumb, insertA
 app.use('/mcp', mcpRouter({
   db, token, TYPES: V.TYPES, deleteDelivery, removeAssetFiles, importFile, usage, originOf, fmtSize: V.fmtSize, userView: billing.view,
   gdrive, vault, queueImport, importStatus, spaceProblem, cleanFolder,
+  makeUploadLink,
 }));
 
 // ---------- client: delivery ----------

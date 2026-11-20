@@ -17,7 +17,7 @@ const newKey = () => KEY_PREFIX + crypto.randomBytes(32).toString('base64url');
 // ctx: what the tools need from server.js (database, storage, plan checks, helpers).
 function mcpRouter(ctx) {
   const { db, token, TYPES, deleteDelivery, removeAssetFiles, importFile,
-    usage, originOf, fmtSize, userView, gdrive, vault, queueImport, importStatus, spaceProblem, cleanFolder } = ctx;
+    usage, originOf, fmtSize, userView, gdrive, vault, queueImport, importStatus, spaceProblem, cleanFolder, makeUploadLink } = ctx;
   const router = express.Router();
 
   const findKey = db.prepare('SELECT k.id AS key_id, u.* FROM api_keys k JOIN users u ON u.id = k.user_id WHERE k.key_hash = ?');
@@ -63,6 +63,8 @@ function mcpRouter(ctx) {
         + 'Adding files: for files in the user\'s Google Drive (private or shared), use add_files_from_google_drive with the Drive links or file ids, '
         + 'even when they are not public; it works once the user has connected Google Drive in ContentFlows (Connect AI). '
         + 'For the user\'s Vault use browse_vault and add_files_from_vault. For any other public link use add_file_from_url. '
+        + 'For files on the user\'s own computer, use create_upload_links and then send each file to its link with the curl command it returns '
+        + '(this needs an app that can run commands on that computer, such as Claude Desktop with folder access or Claude Code). '
         + 'Drive and Vault copies run in the background: check them with get_import_status before saying they are done. '
         + 'Before adding, look at get_delivery so files that are already there are not added twice. '
         + 'Always show the share link exactly as returned. Before remove_file, new_share_link or delete_delivery, confirm with the user.',
@@ -264,6 +266,38 @@ function mcpRouter(ctx) {
       const full = roomFor(items);
       if (full) return fail(`${full} Upgrade at ${origin}/pricing`);
       return queued(p, items, cleanFolder(folder), skipped.length ? { skipped } : {});
+    });
+
+    server.registerTool('create_upload_links', {
+      title: 'Upload files from this computer',
+      description: 'Make one private upload link per file so files on the user\'s own computer go straight into a delivery at full quality. '
+        + 'Then, for each file, run the returned curl command on that computer (curl -T "<path>" "<upload_url>"); the answer is JSON with ok and the new file. '
+        + 'Use it when the files are local (Desktop, Downloads, an external drive). It needs an app that can run commands on the user\'s computer, '
+        + 'such as Claude Desktop with folder access or Claude Code; in a chat with no access to the computer, tell the user to upload in the ContentFlows app instead. '
+        + 'Each link takes one file and expires after 24 hours. No size limit beyond the plan and the per-file limit.',
+      inputSchema: {
+        delivery_id: z.number().int(),
+        files: z.array(z.object({
+          name: z.string().min(1).max(255).describe('File name with extension as the client should see it, like "Reel 2.mp4"'),
+          size_bytes: z.number().int().min(0).optional().describe('File size, when known, to check the plan has room first'),
+        })).min(1).max(100),
+        folder: z.string().max(300).optional().describe('Delivery folder to put them in, like "Reels". Default: the top level'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    }, async ({ delivery_id, files, folder }) => {
+      const p = own(delivery_id);
+      if (!p) return fail(`No delivery with id ${delivery_id}.`);
+      const full = spaceProblem(user, files.reduce((n, f) => n + (f.size_bytes || 0), 0));
+      if (full) return fail(`${full} Upgrade at ${origin}/pricing`);
+      const dest = cleanFolder(folder);
+      const links = files.map((f) => {
+        const l = makeUploadLink(user, p, { name: f.name, folder: dest });
+        const url = `${origin}/up/${l.token}`;
+        return { name: f.name, upload_url: url, curl: `curl --fail-with-body -T "<path to ${f.name.replace(/"/g, '')}>" "${url}"`, expires_at: l.expires_at };
+      });
+      return ok({ delivery_id: p.id, folder: dest, links,
+        how: 'Run each curl command on the user\'s computer with the real file path. Upload one file per link; a failed upload can be retried on the same link.',
+        share_link: link(p) });
     });
 
     server.registerTool('search_google_drive', {
