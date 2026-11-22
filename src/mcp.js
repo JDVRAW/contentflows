@@ -3,14 +3,12 @@
 // creator whose API key came with it. The key goes in an "Authorization: Bearer <key>" header, or
 // in the address itself (/mcp/<key>) for apps whose connector screens only take a URL.
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { z } = require('zod');
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
-const { download } = require('./fetch-file');
+const retention = require('./retention');
 
 const KEY_PREFIX = 'cf_';
 const hashKey = (k) => crypto.createHash('sha256').update(k).digest('hex');
@@ -18,8 +16,8 @@ const newKey = () => KEY_PREFIX + crypto.randomBytes(32).toString('base64url');
 
 // ctx: what the tools need from server.js (database, storage, plan checks, helpers).
 function mcpRouter(ctx) {
-  const { db, token, TYPES, storage, kindOf, makeThumb, insertAsset, removeAssetFiles, spaceProblem, spaceLeft, reserved,
-    usage, originOf, MAX_UPLOAD, UPLOADS, fmtSize, userView } = ctx;
+  const { db, token, TYPES, deleteDelivery, removeAssetFiles, importFile,
+    usage, originOf, fmtSize, userView, gdrive, vault, queueImport, importStatus, spaceProblem, cleanFolder, makeUploadLink } = ctx;
   const router = express.Router();
 
   const findKey = db.prepare('SELECT k.id AS key_id, u.* FROM api_keys k JOIN users u ON u.id = k.user_id WHERE k.key_hash = ?');
@@ -60,7 +58,15 @@ function mcpRouter(ctx) {
     const server = new McpServer({ name: 'contentflows', version: '1.0.0' }, {
       instructions: 'ContentFlows delivers final photoshoots, films and commercials to clients through one private link. '
         + 'A "delivery" is one project for one client: its files, a share link, and settings (password, expiry, downloads). '
-        + 'Typical flow: create_delivery, add_file_from_url for each file, then give the user the share link from the result. '
+        + 'Auto-delete is off unless turned on: then the delivery and its files are deleted auto_delete_days after the client first downloads anything (deletes_on). '
+        + 'Typical flow: create_delivery, add files, then give the user the share link from the result. '
+        + 'Adding files: for files in the user\'s Google Drive (private or shared), use add_files_from_google_drive with the Drive links or file ids, '
+        + 'even when they are not public; it works once the user has connected Google Drive in ContentFlows (Connect AI). '
+        + 'For the user\'s Vault use browse_vault and add_files_from_vault. For any other public link use add_file_from_url. '
+        + 'For files on the user\'s own computer, use create_upload_links and then send each file to its link with the curl command it returns '
+        + '(this needs an app that can run commands on that computer, such as Claude Desktop with folder access or Claude Code). '
+        + 'Drive and Vault copies run in the background: check them with get_import_status before saying they are done. '
+        + 'Before adding, look at get_delivery so files that are already there are not added twice. '
         + 'Always show the share link exactly as returned. Before remove_file, new_share_link or delete_delivery, confirm with the user.',
     });
     const link = (p) => `${origin}/d/${p.share_token}`;
@@ -79,7 +85,9 @@ function mcpRouter(ctx) {
       return {
         id: p.id, title: p.title, type: p.type, client_name: p.client_name, client_email: p.client_email,
         share_link: link(p), password_protected: !!p.password_hash, downloads_allowed: !!p.allow_download,
-        expires_on: p.expires_at, files: n.files, total_size: fmtSize(n.bytes), views: n.views, downloads: n.downloads,
+        expires_on: p.expires_at,
+        auto_delete: !!p.auto_delete, auto_delete_days: retention.daysOf(p), deletes_on: p.auto_delete && p.delete_at ? `${p.delete_at.replace(' ', 'T')}Z` : null,
+        files: n.files, total_size: fmtSize(n.bytes), views: n.views, downloads: n.downloads,
         created_at: p.created_at,
       };
     };
@@ -116,7 +124,7 @@ function mcpRouter(ctx) {
 
     server.registerTool('create_delivery', {
       title: 'Create a delivery',
-      description: 'Create a new delivery for a client. Returns its id and share link. Add files next with add_file_from_url.',
+      description: 'Create a new delivery for a client. Returns its id and share link. Add files next with add_files_from_google_drive, add_files_from_vault or add_file_from_url.',
       inputSchema: {
         title: z.string().min(1).max(200).describe('e.g. "Ana & Luis wedding — finals"'),
         type: typeEnum.optional().describe(`One of: ${Object.entries(TYPES).map(([k, v]) => `${k} (${v})`).join(', ')}. Default project`),
@@ -126,13 +134,15 @@ function mcpRouter(ctx) {
         password: z.string().min(1).max(200).optional().describe('If set, the client needs it to open the link'),
         expires_on: dateText.optional().describe('Last day the link works (YYYY-MM-DD)'),
         allow_downloads: z.boolean().optional().describe('Default true'),
+        auto_delete: z.boolean().optional().describe('Delete the delivery and its files auto_delete_days after the client\'s first download. Default false'),
+        auto_delete_days: z.number().int().min(1).max(retention.MAX_DAYS).optional().describe(`Days from the client's first download to deletion. Default ${retention.DEFAULT_DAYS}`),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     }, async (a) => {
-      const r = db.prepare(`INSERT INTO projects (user_id, title, type, client_name, client_email, message, share_token, password_hash, allow_download, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, a.title.trim(), a.type || 'project', a.client_name?.trim() || null,
+      const r = db.prepare(`INSERT INTO projects (user_id, title, type, client_name, client_email, message, share_token, password_hash, allow_download, expires_at, auto_delete, auto_delete_days)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, a.title.trim(), a.type || 'project', a.client_name?.trim() || null,
         a.client_email?.trim() || null, a.message?.trim() || null, token(16), a.password ? bcrypt.hashSync(a.password, 10) : null,
-        a.allow_downloads === false ? 0 : 1, a.expires_on || null);
+        a.allow_downloads === false ? 0 : 1, a.expires_on || null, a.auto_delete ? 1 : 0, retention.cleanDays(a.auto_delete_days));
       return ok(summary(own(r.lastInsertRowid)));
     });
 
@@ -150,6 +160,8 @@ function mcpRouter(ctx) {
         remove_password: z.boolean().optional(),
         expires_on: dateText.or(z.literal('')).optional().describe('YYYY-MM-DD, or "" for no expiry'),
         allow_downloads: z.boolean().optional(),
+        auto_delete: z.boolean().optional().describe('true turns auto-delete on (the countdown starts at the client\'s next download); false keeps the delivery and stops a running countdown'),
+        auto_delete_days: z.number().int().min(1).max(retention.MAX_DAYS).optional().describe('Days from the client\'s first download to deletion; moves a running countdown'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     }, async (a) => {
@@ -160,17 +172,24 @@ function mcpRouter(ctx) {
       if (a.remove_password) pw = null;
       if (a.password) pw = bcrypt.hashSync(a.password, 10);
       db.prepare(`UPDATE projects SET title = ?, type = ?, client_name = ?, client_email = ?, message = ?,
-        password_hash = ?, allow_download = ?, expires_at = ? WHERE id = ?`).run(
+        password_hash = ?, allow_download = ?, expires_at = ?, auto_delete = ?, auto_delete_days = ?, delete_at = ? WHERE id = ?`).run(
         a.title?.trim() || p.title, a.type || p.type, pick(a.client_name, p.client_name), pick(a.client_email, p.client_email),
         pick(a.message, p.message), pw, a.allow_downloads === undefined ? p.allow_download : a.allow_downloads ? 1 : 0,
-        a.expires_on === undefined ? p.expires_at : a.expires_on || null, p.id);
+        a.expires_on === undefined ? p.expires_at : a.expires_on || null,
+        ...(() => {
+          const on = a.auto_delete === undefined ? !!p.auto_delete : a.auto_delete;
+          const days = a.auto_delete_days === undefined ? retention.daysOf(p) : retention.cleanDays(a.auto_delete_days);
+          const at = on && p.auto_delete && p.delete_at ? retention.shiftDeleteAt(p.delete_at, retention.daysOf(p), days) : null;
+          return [on ? 1 : 0, days, at];
+        })(), p.id);
       return ok(summary(own(p.id)));
     });
 
     server.registerTool('add_file_from_url', {
       title: 'Add a file from a link',
       description: 'Download a file from a public link and add it to a delivery. Works with direct download links and with Dropbox and '
-        + 'Google Drive share links (the file must be shared as "anyone with the link"). Thumbnails are made for photos and videos. '
+        + 'Google Drive share links. A Drive link is opened with the user\'s connected Google Drive when there is one, so it doesn\'t need to be public '
+        + '(for several Drive files, or a Drive folder, use add_files_from_google_drive instead). Thumbnails are made for photos and videos. '
         + 'Big videos can take a while; for very large files suggest uploading in the ContentFlows app instead.',
       inputSchema: {
         delivery_id: z.number().int(),
@@ -181,51 +200,186 @@ function mcpRouter(ctx) {
     }, async ({ delivery_id, url, filename }) => {
       const p = own(delivery_id);
       if (!p) return fail(`No delivery with id ${delivery_id}.`);
-      const full = spaceProblem(user, 1);
-      if (full) return fail(full);
-      const dir = path.join(UPLOADS, String(p.id));
-      fs.mkdirSync(dir, { recursive: true });
-      const tmp = path.join(dir, `${token(12)}.part`);
-      const hold = `mcp:${token(9)}`;
-      let got;
       try {
-        got = await download(url, tmp, {
-          maxBytes: (declared) => {
-            const max = Math.min(MAX_UPLOAD, spaceLeft(user));
-            // Hold the size against the plan while it downloads, like browser uploads do, so
-            // parallel uploads can't overshoot it.
-            reserved.set(hold, { userId: user.id, size: declared && declared <= max ? declared : max, at: Date.now() });
-            return max;
-          },
-        });
-      } catch (e) {
-        reserved.delete(hold);
-        if (e.code === 'ETOOBIG') return fail(spaceProblem(user, e.size) || `That file is over the ${fmtSize(MAX_UPLOAD)} limit per file.`);
-        return fail(`Couldn't get the file: ${e.message}`);
-      }
-      try {
-        const name = String(filename || got.name || 'file').replace(/[\\/\x00-\x1f]/g, '_').slice(0, 255) || 'file';
-        const kind = kindOf(got.type || '', name);
-        const ext = path.extname(name).toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 12);
-        let stored, where = null;
-        if (storage.enabled) {
-          stored = `projects/${p.id}/${token(12)}${ext}`;
-          await storage.putFile(stored, tmp, got.type);
-          where = 's3';
-        } else {
-          stored = token(12) + ext;
-          fs.renameSync(tmp, path.join(dir, stored));
+        let src = { url };
+        if (gdrive.isDriveLink(url) && gdrive.connected(user)) {
+          const m = await gdrive.meta(user, gdrive.idOf(url));
+          if (m.folder) return fail('That is a Google Drive folder. Use add_files_from_google_drive to add what is inside it.');
+          if (gdrive.isNative(m)) return fail(`"${m.name}" is a Google Docs, Sheets or Slides file, which can't be added as it is. Export it as a PDF or other file first.`);
+          src = { ...(await gdrive.source(user, m.id)) };
+          filename = filename || m.name;
         }
-        const r = insertAsset.run(p.id, name, stored, got.type, got.size, kind, where, p.id);
-        const thumb = await makeThumb(where ? tmp : path.join(dir, stored), kind, r.lastInsertRowid);
-        if (thumb) db.prepare('UPDATE assets SET thumb_name = ? WHERE id = ?').run(thumb, r.lastInsertRowid);
-        return ok({ file: { id: Number(r.lastInsertRowid), name, kind, size: fmtSize(got.size) }, delivery: summary(own(p.id)) });
+        const f = await importFile(user, p, src.url, { filename, headers: src.headers });
+        return ok({ file: { id: f.id, name: f.name, kind: f.kind, size: fmtSize(f.size) }, delivery: summary(own(p.id)) });
       } catch (e) {
-        return fail(`The file downloaded but couldn't be saved: ${e.message}`);
-      } finally {
-        reserved.delete(hold);
-        fs.rm(tmp, { force: true }, () => {});
+        return fail(e.message);
       }
+    });
+
+    const queued = (p, items, folder, extra = {}) => {
+      const job = queueImport(p.id, items, folder);
+      return ok({ ...extra, queued: items.map((i) => ({ name: i.name, size: fmtSize(i.size) })), folder: folder || null,
+        status: 'Copying in the background, one file at a time. Big videos take a few minutes each. Call get_import_status to see when they are done.',
+        in_progress: job.items.filter((i) => i.state === 'waiting' || i.state === 'copying').length, delivery_id: p.id });
+    };
+    const roomFor = (items) => spaceProblem(user, items.reduce((n, i) => n + (i.size || 0), 0));
+
+    server.registerTool('add_files_from_google_drive', {
+      title: 'Add files from Google Drive',
+      description: 'Copy files from the user\'s own Google Drive into a delivery, server to server, at full quality. The files do NOT need to be shared '
+        + 'publicly: ContentFlows reads them with the Google Drive the user connected under Connect AI. Pass Drive share links, '
+        + 'file ids, or a folder link/id (adds the files directly inside that folder; subfolders are listed but not added). '
+        + 'Returns right away while the copies run in the background; check progress with get_import_status. '
+        + 'If Google Drive is not connected, the answer says where the user connects it.',
+      inputSchema: {
+        delivery_id: z.number().int(),
+        files: z.array(z.string().min(1).max(500)).min(1).max(200).describe('Google Drive links or ids of files or folders'),
+        folder: z.string().max(300).optional().describe('Delivery folder to put them in, like "Reels" or "Photos/Selects". Default: the top level'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    }, async ({ delivery_id, files, folder }) => {
+      const p = own(delivery_id);
+      if (!p) return fail(`No delivery with id ${delivery_id}.`);
+      if (!gdrive.enabled) return fail('Google Drive isn\'t set up on this ContentFlows server yet. Share the files as "anyone with the link" and use add_file_from_url, or upload them in the app.');
+      if (!gdrive.connected(user)) return fail(`Google Drive isn't connected to ContentFlows yet. Ask the user to open ${origin}/connect#google and choose Connect Google Drive (one time), then try again.`);
+      const items = [], skipped = [];
+      try {
+        for (const raw of files) {
+          const id = gdrive.idOf(raw);
+          if (!id) { skipped.push({ file: raw, reason: 'Not a Google Drive link or id' }); continue; }
+          let m;
+          try { m = await gdrive.meta(user, id); } catch (e) {
+            if (e.reconnect) throw e;
+            skipped.push({ file: raw, reason: e.message }); continue;
+          }
+          const inside = m.folder ? await gdrive.list(user, m.id) : [m];
+          for (const f of inside) {
+            if (f.folder) skipped.push({ file: f.name, reason: 'Subfolder: pass its link to add what is inside it' });
+            else if (gdrive.isNative(f)) skipped.push({ file: f.name, reason: 'Google Docs, Sheets and Slides files can\'t be added; export them first' });
+            else if (!items.some((i) => i.driveId === f.id)) items.push({ from: 'drive', driveId: f.id, name: f.name, size: f.size });
+          }
+        }
+      } catch (e) {
+        return fail(e.message);
+      }
+      if (!items.length) return fail(`Nothing to add.${skipped.length ? ` ${JSON.stringify(skipped)}` : ''}`);
+      const full = roomFor(items);
+      if (full) return fail(`${full} Upgrade at ${origin}/pricing`);
+      return queued(p, items, cleanFolder(folder), skipped.length ? { skipped } : {});
+    });
+
+    server.registerTool('create_upload_links', {
+      title: 'Upload folders from this computer',
+      description: 'Make one private upload link per folder so files on the user\'s own computer go straight into a delivery at full quality. '
+        + 'One link takes every file of a folder: run the returned folder_script on that computer with the folder\'s real path, and it sends each file '
+        + '(subfolders become folders in the delivery, hidden files like .DS_Store are skipped, files over 90 MB go in 90 MB parts since the site refuses single requests over 100 MB) '
+        + 'and prints one line per file, ok or FAILED. For one loose file use the curl command instead. '
+        + 'Use it when the files are local (Desktop, Downloads, an external drive). It needs an app that can run commands on the user\'s computer, '
+        + 'such as Claude Desktop with folder access or Claude Code; in a chat with no access to the computer, tell the user to upload in the ContentFlows app instead. '
+        + 'Links work for 24 hours. No size limit beyond the plan and the per-file limit. Do not make a link per file.',
+      inputSchema: {
+        delivery_id: z.number().int(),
+        folders: z.array(z.object({
+          folder: z.string().max(300).optional().describe('Delivery folder the files go in, like "Selects". Leave out for the top level'),
+          size_bytes: z.number().int().min(0).optional().describe('Total size of the files, when known, to check the plan has room first'),
+        })).min(1).max(50).optional().describe('One entry per folder to upload. Default: one link for the delivery\'s top level'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    }, async ({ delivery_id, folders }) => {
+      const p = own(delivery_id);
+      if (!p) return fail(`No delivery with id ${delivery_id}.`);
+      folders = folders && folders.length ? folders : [{}];
+      const full = spaceProblem(user, folders.reduce((n, f) => n + (f.size_bytes || 0), 0));
+      if (full) return fail(`${full} Upgrade at ${origin}/pricing`);
+      const links = folders.map((f) => {
+        const dest = cleanFolder(f.folder);
+        const l = makeUploadLink(user, p, { folder: dest });
+        const url = `${origin}/up/${l.token}`;
+        const q = '--url-query "name=$n" --url-query "dir=$d"';
+        const send = `curl -sS --fail-with-body --retry 3 ${q}`;
+        // bash 3.2 (macOS) and up. Every regular, non-hidden file under the folder, in name order.
+        const folderScript = `cd "<path to folder>" && find . -type f ! -name '.*' ! -path '*/.*' -print0 | sort -z | while IFS= read -r -d '' f; do `
+          + `f="\${f#./}"; n="\${f##*/}"; d="$(dirname "$f")"; [ "$d" = . ] && d=""; s=$(wc -c < "$f" | tr -d ' '); `
+          + `if [ "$s" -le 94371840 ]; then ${send} -T "$f" "${url}" >/dev/null && echo "ok $f" || echo "FAILED $f"; `
+          + `else t="$(mktemp -d)"; split -b 90m "$f" "$t/p"; c=$(ls "$t" | wc -l | tr -d ' '); i=0; r=0; `
+          + `for p in "$t"/p*; do i=$((i+1)); ${send} --url-query "part=$i" --url-query "parts=$c" -T "$p" "${url}" >/dev/null || { r=1; break; }; done; `
+          + `rm -rf "$t"; [ $r = 0 ] && echo "ok $f" || echo "FAILED $f"; fi; done`;
+        const curl = `curl --fail-with-body --url-query "name=<file name>" -T "<path to file>" "${url}"`;
+        return { folder: dest, upload_url: url, folder_script: folderScript, curl, expires_at: l.expires_at };
+      });
+      return ok({ delivery_id: p.id, links,
+        how: 'Put the real folder path in place of <path to folder> and run folder_script with bash on the user\'s computer (it needs curl 7.87 or newer, which any recent Mac has); it can take a while for big folders. '
+          + 'Run it again for any FAILED files, or send one file with curl (name is the name the client sees). Files already sent are not skipped on a rerun, so only resend the failed ones.',
+        share_link: link(p) });
+    });
+
+    server.registerTool('search_google_drive', {
+      title: 'Find files in Google Drive',
+      description: 'Search the user\'s connected Google Drive by name (files and folders), or list a folder\'s contents with folder. '
+        + 'Returns ids to pass to add_files_from_google_drive.',
+      inputSchema: {
+        name: z.string().min(1).max(200).optional().describe('Text in the file or folder name, like "Zenaida"'),
+        folder: z.string().max(500).optional().describe('A Drive folder link or id: list what is inside it instead of searching'),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    }, async ({ name, folder }) => {
+      if (!gdrive.connected(user)) return fail(gdrive.enabled ? `Google Drive isn't connected to ContentFlows yet. Ask the user to open ${origin}/connect#google and choose Connect Google Drive.` : 'Google Drive isn\'t set up on this ContentFlows server yet.');
+      if (!name && !folder) return fail('Pass name or folder.');
+      try {
+        const id = folder && gdrive.idOf(folder);
+        if (folder && !id) return fail('That is not a Google Drive folder link or id.');
+        const found = id ? await gdrive.list(user, id) : await gdrive.search(user, name);
+        return ok({ files: found.map((f) => ({ id: f.id, name: f.name, folder: f.folder, type: f.mimeType, size: f.folder ? null : fmtSize(f.size), modified: f.modified })) });
+      } catch (e) { return fail(e.message); }
+    });
+
+    server.registerTool('browse_vault', {
+      title: 'Browse the Vault',
+      description: 'List one folder of the user\'s Vault (their ContentFlows storage platform): its subfolders and files with ids. '
+        + 'Leave folder_id out for the top level. Use the file ids with add_files_from_vault.',
+      inputSchema: { folder_id: z.string().max(64).optional() },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    }, async ({ folder_id }) => {
+      if (!vault.connected(user)) return fail(`The Vault isn't connected. Ask the user to connect it at ${origin}/connect#vault.`);
+      try {
+        const r = await vault.browse(user, folder_id || null);
+        return ok({ path: r.path || [], folders: r.folders || [], files: r.files || [] });
+      } catch (e) { return fail(e.message); }
+    });
+
+    server.registerTool('add_files_from_vault', {
+      title: 'Add files from the Vault',
+      description: 'Copy files from the user\'s Vault into a delivery, server to server, at full quality. Get the file ids from browse_vault. '
+        + 'Returns right away while the copies run in the background; check progress with get_import_status.',
+      inputSchema: {
+        delivery_id: z.number().int(),
+        files: z.array(z.object({ id: z.string().regex(/^[\w-]{1,64}$/), name: z.string().max(255).optional(), size: z.number().optional() }))
+          .min(1).max(500).describe('Files from browse_vault: their id, and name and size when known'),
+        folder: z.string().max(300).optional().describe('Delivery folder to put them in. Default: the top level'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    }, async ({ delivery_id, files, folder }) => {
+      const p = own(delivery_id);
+      if (!p) return fail(`No delivery with id ${delivery_id}.`);
+      if (!vault.connected(user)) return fail(`The Vault isn't connected. Ask the user to connect it at ${origin}/connect#vault.`);
+      const items = files.map((f) => ({ from: 'vault', vaultId: f.id, name: f.name || 'file', size: f.size || 0 }));
+      const full = roomFor(items);
+      if (full) return fail(`${full} Upgrade at ${origin}/pricing`);
+      return queued(p, items, cleanFolder(folder));
+    });
+
+    server.registerTool('get_import_status', {
+      title: 'Check background copies',
+      description: 'Progress of files being copied into a delivery from Google Drive or the Vault: each file is waiting, copying, done or failed (with the reason).',
+      inputSchema: { delivery_id: z.number().int() },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    }, async ({ delivery_id }) => {
+      const p = own(delivery_id);
+      if (!p) return fail(`No delivery with id ${delivery_id}.`);
+      const st = importStatus(p.id);
+      const count = (s) => st.items.filter((i) => i.state === s).length;
+      return ok({ delivery_id: p.id, running: st.running, done: count('done'), copying: count('copying'), waiting: count('waiting'), failed: count('failed'),
+        files: st.items.map((i) => ({ ...i, size: fmtSize(i.size) })), share_link: link(p) });
     });
 
     server.registerTool('set_cover', {
@@ -266,11 +420,9 @@ function mcpRouter(ctx) {
     }, async ({ delivery_id }) => {
       const p = own(delivery_id);
       if (!p) return fail(`No delivery with id ${delivery_id}.`);
-      const files = db.prepare('SELECT * FROM assets WHERE project_id = ?').all(p.id);
-      const freed = files.reduce((n, a) => n + a.size, 0);
       // Same as deleting it in the app: the row goes (files, folders and events cascade), then the stored bytes.
-      db.prepare('DELETE FROM projects WHERE id = ?').run(p.id);
-      files.forEach(removeAssetFiles);
+      const files = deleteDelivery(p.id);
+      const freed = files.reduce((n, a) => n + a.size, 0);
       return ok({ deleted: { id: p.id, title: p.title, client_name: p.client_name, files: files.length, freed: fmtSize(freed) } });
     });
 

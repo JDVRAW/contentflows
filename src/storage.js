@@ -51,6 +51,12 @@ async function completeUpload(Key, UploadId, parts) {
   return head.ContentLength;
 }
 
+// One part of a multipart upload, streamed straight from a request (Body) of a known length.
+async function putPart(Key, UploadId, PartNumber, Body, ContentLength) {
+  const r = await client.send(new UploadPartCommand({ Bucket, Key, UploadId, PartNumber, ContentLength, Body }));
+  return r.ETag;
+}
+
 const abortUpload = (Key, UploadId) => client.send(new AbortMultipartUploadCommand({ Bucket, Key, UploadId })).catch(() => {});
 
 // Upload a file from this server's disk (files an assistant adds by link land here first).
@@ -75,6 +81,51 @@ async function putFile(Key, file, ContentType) {
     return await completeUpload(Key, UploadId, parts);
   } catch (e) {
     await abortUpload(Key, UploadId);
+    throw e;
+  }
+}
+
+// Upload from a stream of unknown or known length (a file being copied in from a link, the Vault or
+// Google Drive), without writing it to this server's disk: the stream is cut into parts held in
+// memory one at a time and each part goes to the bucket before more is read. sizeHint (the expected
+// size, or the most it may be) picks the part size so even the biggest file fits in 10,000 parts.
+// A file smaller than one part goes in a single request. Resolves to the stored size.
+async function putStream(Key, stream, ContentType, sizeHint) {
+  ContentType = ContentType || 'application/octet-stream';
+  const step = partSizeFor(sizeHint || 0);
+  let buf = [], held = 0, UploadId = null, PartNumber = 0, total = 0;
+  const parts = [];
+  const flush = async () => {
+    const Body = Buffer.concat(buf, held);
+    buf = []; held = 0;
+    if (!UploadId) UploadId = await startUpload(Key, ContentType);
+    PartNumber++;
+    const r = await client.send(new UploadPartCommand({ Bucket, Key, UploadId, PartNumber, ContentLength: Body.length, Body }));
+    parts.push({ PartNumber, ETag: r.ETag });
+  };
+  try {
+    for await (const chunk of stream) {
+      total += chunk.length;
+      // Keep every part exactly one step long (S3 wants equal parts but the last).
+      let c = chunk;
+      while (held + c.length >= step) {
+        const take = step - held;
+        buf.push(c.subarray(0, take)); held += take;
+        c = c.subarray(take);
+        await flush();
+      }
+      if (c.length) { buf.push(c); held += c.length; }
+    }
+    if (!UploadId) {
+      const Body = Buffer.concat(buf, held);
+      await client.send(new PutObjectCommand({ Bucket, Key, ContentType, ContentLength: Body.length, Body }));
+      return total;
+    }
+    if (held) await flush();
+    await completeUpload(Key, UploadId, parts);
+    return total;
+  } catch (e) {
+    if (UploadId) await abortUpload(Key, UploadId);
     throw e;
   }
 }
@@ -104,4 +155,4 @@ const remove = (Key) => client.send(new DeleteObjectCommand({ Bucket, Key })).ca
 // Some S3 variables set but not all: almost always a setup slip worth pointing out.
 const partlySet = missing.length > 0 && missing.length < REQUIRED.length ? missing : null;
 
-module.exports = { enabled, describe, partlySet, partSizeFor, startUpload, signParts, completeUpload, abortUpload, signedGet, getRange, getStream, remove, disposition, putFile };
+module.exports = { enabled, describe, partlySet, partSizeFor, startUpload, signParts, completeUpload, abortUpload, putPart, signedGet, getRange, getStream, remove, disposition, putFile, putStream };

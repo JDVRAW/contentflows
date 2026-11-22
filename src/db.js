@@ -70,6 +70,24 @@ if (!db.prepare('PRAGMA table_info(assets)').all().some((c) => c.name === 'stora
 if (!db.prepare('PRAGMA table_info(assets)').all().some((c) => c.name === 'folder'))
   db.exec('ALTER TABLE assets ADD COLUMN folder TEXT');
 
+// A screen-sized JPEG of a photo for the client gallery (src/media.js makeView): a file name in
+// DATA_DIR/thumbs for files on disk, or a bucket key ("views/<id>.jpg") for files in object storage.
+if (!db.prepare('PRAGMA table_info(assets)').all().some((c) => c.name === 'view_name'))
+  db.exec('ALTER TABLE assets ADD COLUMN view_name TEXT');
+
+// Upload links for AI assistants (server.js), kept here so a restart or redeploy doesn't void them.
+// files: JSON list of [file key, state] for files partway into a multipart upload in the bucket.
+db.exec(`
+CREATE TABLE IF NOT EXISTS upload_links (
+  token TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  project_id INTEGER NOT NULL,
+  folder TEXT,
+  until INTEGER NOT NULL,
+  files TEXT
+);
+`);
+
 // Folders a creator made by hand on the project page. A folder with files in it also shows
 // without a row here (it comes from the files' own folder); this keeps empty ones around.
 db.exec(`
@@ -95,6 +113,12 @@ db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_share ON folders(share_to
 if (!db.prepare('PRAGMA table_info(folders)').all().some((c) => c.name === 'position'))
   db.exec('ALTER TABLE folders ADD COLUMN position INTEGER');
 
+// How the files inside a folder are ordered, for the creator and the client: 'custom' (dragged by hand,
+// kept in assets.position), 'name', 'name_desc', 'newest', 'oldest', 'kind' or 'size'. NULL = the default
+// ('name' for a folder, 'custom' for loose files, which is upload order until they're dragged).
+if (!db.prepare('PRAGMA table_info(folders)').all().some((c) => c.name === 'sort'))
+  db.exec('ALTER TABLE folders ADD COLUMN sort TEXT');
+
 // Storage plan and Stripe subscription, per creator.
 const userCols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
 for (const [name, type] of [['plan', "TEXT NOT NULL DEFAULT 'free'"], ['plan_interval', 'TEXT'], ['plan_status', 'TEXT'],
@@ -104,7 +128,18 @@ for (const [name, type] of [['plan', "TEXT NOT NULL DEFAULT 'free'"], ['plan_int
   ['stripe_mode', 'TEXT'],
   // Branding (Pro and up): logo files under DATA_DIR/brand. logo_dark is the dark-ink version for
   // light backgrounds, logo_light the light-ink version for dark ones. Either can stand in for both.
-  ['logo_dark', 'TEXT'], ['logo_light', 'TEXT']]) {
+  ['logo_dark', 'TEXT'], ['logo_light', 'TEXT'],
+  // The creator's own Vault (their storage platform), connected under Connect: its address, a read-only
+  // access key made in the Vault, and the Vault account it opens (shown so they know which one).
+  ['vault_url', 'TEXT'], ['vault_key', 'TEXT'], ['vault_email', 'TEXT'],
+  // Set when the creator closes the "New: Add from Vault" card on their dashboard, so it stays closed.
+  ['vault_promo_hidden', 'INTEGER'],
+  // The creator's Google Drive, connected under Connect with Google sign-in (read-only): the refresh
+  // token that lets ContentFlows copy files from it, and the Google account's email (shown to them).
+  ['gdrive_refresh', 'TEXT'], ['gdrive_email', 'TEXT'],
+  // The creator's profile on their Deliveries page: a round profile photo, a wide header photo (files
+  // under DATA_DIR/brand, like logos) and a short line about them.
+  ['avatar', 'TEXT'], ['header_photo', 'TEXT'], ['bio', 'TEXT']]) {
   if (!userCols.has(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
 }
 
@@ -127,6 +162,18 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
 const projectCols = new Set(db.prepare('PRAGMA table_info(projects)').all().map((c) => c.name));
 for (const name of ['emailed_to', 'emailed_at']) if (!projectCols.has(name)) db.exec(`ALTER TABLE projects ADD COLUMN ${name} TEXT`);
 
+// Auto-delete (opt-in): auto_delete = 1 means the delivery deletes itself auto_delete_days after the client's
+// first download (see src/retention.js); delete_at is when, set on that first download (NULL = not started).
+// New deliveries are always inserted with auto_delete set explicitly (0 unless the creator turns it on).
+if (!projectCols.has('auto_delete')) db.exec('ALTER TABLE projects ADD COLUMN auto_delete INTEGER NOT NULL DEFAULT 0');
+if (!projectCols.has('delete_at')) db.exec('ALTER TABLE projects ADD COLUMN delete_at TEXT');
+if (!projectCols.has('auto_delete_days')) {
+  db.exec('ALTER TABLE projects ADD COLUMN auto_delete_days INTEGER');
+  // Auto-delete briefly shipped switched on for every delivery. Now that it's opt-in, turn it off
+  // everywhere (running countdowns included) so nothing is deleted that the creator didn't choose.
+  db.exec('UPDATE projects SET auto_delete = 0, delete_at = NULL');
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_projects_delete_at ON projects(delete_at)');
 // Whether the creator has confirmed they own their login email (by opening a link sent to it).
 // Accounts made before this check existed count as confirmed.
 if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'email_verified')) {

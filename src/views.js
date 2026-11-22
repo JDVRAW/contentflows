@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const { PLANS } = require('./plans');
+const retention = require('./retention');
+const { thumbRatio } = require('./media');
 // Inline brand logo so the wordmark and three squares follow the header colour; the red square and dot stay brand red.
 const LOGO = fs.readFileSync(path.join(__dirname, '..', 'public', 'brand', 'contentflows-logo-color.svg'), 'utf8')
   .replace(/<title>.*?<\/title>/, '')
@@ -8,6 +10,18 @@ const LOGO = fs.readFileSync(path.join(__dirname, '..', 'public', 'brand', 'cont
   .replace('role="img" aria-label="ContentFlows"', 'class="logo-svg" aria-hidden="true" focusable="false"')
   .replace(/fill="#111113"/g, 'fill="currentColor"')
   .trim();
+
+// The Vault's mark in ContentFlows' language: three stacked layers (the Vault keeps everything), the top
+// one in ContentFlows red. Paired with a "vault contentflows." wordmark set in Geist, like the domain.
+// Official Vault Me mark (jdvraw/storage-platform src/components/Logo.tsx): four squircle "vault doors",
+// three in the text colour at falling opacity and the fourth ContentFlows red with a keyhole.
+const VAULT_MARK = `<svg class="vault-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+  <rect x="1.5" y="1.5" width="9.5" height="9.5" rx="2.6" fill="currentColor"/>
+  <rect x="13" y="1.5" width="9.5" height="9.5" rx="2.6" fill="currentColor" opacity=".55"/>
+  <rect x="1.5" y="13" width="9.5" height="9.5" rx="2.6" fill="currentColor" opacity=".3"/>
+  <rect x="13" y="13" width="9.5" height="9.5" rx="2.6" fill="#E5402A"/>
+  <circle cx="17.75" cy="16.9" r="1.35" fill="#111113"/><path d="M17.1 17.6h1.3l.35 2.2h-2z" fill="#111113"/></svg>`;
+const VAULT_LOGO = `<span class="vault-logo">${VAULT_MARK}<span class="vault-word">Vault Me</span></span>`;
 
 // The four-square symbol as separate shapes so each one can be animated.
 const SYMBOL = (cls = '') => `<svg class="cf-symbol ${cls}" viewBox="5 5 54 54" aria-hidden="true" focusable="false">
@@ -117,7 +131,7 @@ function appNav(user, current = '') {
           <div class="am-col"><p class="am-head">Deliver</p>${rows.map(row).join('')}</div>
           <div class="am-col am-col-right"><p class="am-head">New delivery</p>
             <a class="am-try" href="/dashboard#new" tabindex="-1" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><span class="am-try-core">${SYMBOL('')}<em>Drop your files</em></span></a>
-            <a class="am-row" href="/connect"><span class="am-ic">${APP_ICONS.ai}</span><span class="am-txt"><b>Connect AI${ARROW}</b><small>Deliver by asking your AI assistant</small></span></a>
+            <a class="am-row" href="/connect"><span class="am-ic">${APP_ICONS.ai}</span><span class="am-txt"><b>Connect AI${ARROW}</b><small>Your AI assistant and your Vault</small></span></a>
           </div>
         </div>
       </div>
@@ -199,7 +213,7 @@ function homePricing() {
   return `<section class="lp lp-dark" data-header-theme="light" id="pricing">
   <div class="lp-inner price-split">
     <div class="price-copy reveal">
-      <p class="lp-label">(04) Pricing</p>
+      <p class="lp-label">(05) Pricing</p>
       <h2 class="lp-heading">Start free. Upgrade when your work outgrows it.</h2>
       <p class="lp-body">Every studio starts with ${planSize(free.limit)} free. Pro and Studio give you room to keep every shoot and every cut online for your clients. Pro and Studio also put your own logo on every delivery.</p>
       <ul class="check-list">
@@ -215,6 +229,11 @@ function homePricing() {
 </section>`;
 }
 
+
+// Ridge lines for the home page's dusk scene (drawn for ContentFlows, not traced from anywhere).
+const RIDGES = {"far": "M0,500 L0,220.4 Q0.0,220.4 10.0,225.2 Q20.0,230.1 30.0,233.4 Q40.0,236.8 50.0,238.3 Q60.0,239.8 70.0,239.4 Q80.0,239.0 90.0,236.9 Q100.0,234.9 110.0,231.7 Q120.0,228.5 130.0,224.9 Q140.0,221.2 150.0,217.8 Q160.0,214.3 170.0,211.6 Q180.0,208.9 190.0,207.3 Q200.0,205.7 210.0,205.1 Q220.0,204.5 230.0,204.7 Q240.0,205.0 250.0,205.6 Q260.0,206.2 270.0,206.7 Q280.0,207.1 290.0,207.1 Q300.0,207.0 310.0,206.2 Q320.0,205.4 330.0,203.9 Q340.0,202.4 350.0,200.4 Q360.0,198.4 370.0,196.4 Q380.0,194.4 390.0,193.0 Q400.0,191.5 410.0,191.1 Q420.0,190.7 430.0,191.5 Q440.0,192.3 450.0,194.3 Q460.0,196.4 470.0,199.4 Q480.0,202.3 490.0,205.7 Q500.0,209.0 510.0,212.1 Q520.0,215.1 530.0,217.1 Q540.0,219.2 550.0,219.7 Q560.0,220.2 570.0,219.0 Q580.0,217.8 590.0,214.8 Q600.0,211.9 610.0,207.5 Q620.0,203.2 630.0,198.0 Q640.0,192.8 650.0,187.4 Q660.0,182.0 670.0,176.9 Q680.0,171.8 690.0,167.4 Q700.0,163.1 710.0,159.5 Q720.0,156.0 730.0,153.1 Q740.0,150.2 750.0,147.6 Q760.0,145.0 770.0,142.4 Q780.0,139.7 790.0,136.5 Q800.0,133.3 810.0,129.3 Q820.0,125.4 830.0,120.8 Q840.0,116.1 850.0,111.0 Q860.0,106.0 870.0,101.0 Q880.0,96.1 890.0,91.9 Q900.0,87.6 910.0,84.8 Q920.0,81.9 930.0,80.9 Q940.0,79.8 950.0,80.8 Q960.0,81.7 970.0,84.5 Q980.0,87.3 990.0,91.6 Q1000.0,95.8 1010.0,100.9 Q1020.0,106.0 1030.0,111.2 Q1040.0,116.4 1050.0,121.1 Q1060.0,125.8 1070.0,129.5 Q1080.0,133.3 1090.0,136.0 Q1100.0,138.6 1110.0,140.3 Q1120.0,142.0 1130.0,143.1 Q1140.0,144.2 1150.0,145.1 Q1160.0,146.1 1170.0,147.4 Q1180.0,148.6 1190.0,150.5 Q1200.0,152.4 1210.0,155.0 Q1220.0,157.6 1230.0,160.8 Q1240.0,163.9 1250.0,167.1 Q1260.0,170.4 1270.0,173.2 Q1280.0,176.1 1290.0,178.0 Q1300.0,179.9 1310.0,180.6 Q1320.0,181.2 1330.0,180.5 Q1340.0,179.7 1350.0,177.7 Q1360.0,175.7 1370.0,173.0 Q1380.0,170.2 1390.0,167.3 Q1400.0,164.4 1410.0,162.1 Q1420.0,159.8 1430.0,158.6 Q1440.0,157.4 1450.0,157.8 Q1460.0,158.2 1470.0,160.2 Q1480.0,162.3 1490.0,165.7 Q1500.0,169.2 1510.0,173.6 Q1520.0,178.0 1530.0,182.8 Q1540.0,187.6 1550.0,192.2 Q1560.0,196.7 1570.0,200.6 Q1580.0,204.4 1590.0,207.4 L1600,210.4 L1600,500 Z", "near": "M0,420 L0,195.1 Q0.0,195.1 10.0,191.5 Q20.0,187.9 30.0,182.5 Q40.0,177.1 50.0,170.8 Q60.0,164.4 70.0,158.2 Q80.0,151.9 90.0,146.5 Q100.0,141.1 110.0,136.8 Q120.0,132.6 130.0,129.3 Q140.0,126.0 150.0,123.1 Q160.0,120.2 170.0,117.0 Q180.0,113.8 190.0,109.9 Q200.0,106.1 210.0,101.5 Q220.0,97.0 230.0,92.4 Q240.0,87.7 250.0,83.9 Q260.0,80.1 270.0,77.9 Q280.0,75.8 290.0,76.1 Q300.0,76.3 310.0,79.0 Q320.0,81.7 330.0,86.4 Q340.0,91.0 350.0,96.7 Q360.0,102.3 370.0,107.8 Q380.0,113.3 390.0,117.8 Q400.0,122.3 410.0,125.4 Q420.0,128.4 430.0,130.1 Q440.0,131.8 450.0,132.8 Q460.0,133.8 470.0,134.8 Q480.0,135.8 490.0,137.5 Q500.0,139.2 510.0,141.8 Q520.0,144.4 530.0,147.6 Q540.0,150.8 550.0,153.9 Q560.0,157.0 570.0,159.2 Q580.0,161.5 590.0,162.2 Q600.0,162.9 610.0,162.1 Q620.0,161.2 630.0,159.2 Q640.0,157.2 650.0,155.0 Q660.0,152.7 670.0,151.2 Q680.0,149.7 690.0,149.9 Q700.0,150.0 710.0,152.2 Q720.0,154.4 730.0,158.3 Q740.0,162.3 750.0,167.3 Q760.0,172.4 770.0,177.5 Q780.0,182.6 790.0,186.8 Q800.0,191.1 810.0,193.9 Q820.0,196.8 830.0,198.3 Q840.0,199.8 850.0,200.5 Q860.0,201.1 870.0,201.5 Q880.0,201.9 890.0,202.8 Q900.0,203.6 910.0,205.1 Q920.0,206.5 930.0,208.3 Q940.0,210.1 950.0,211.5 Q960.0,212.9 970.0,213.0 Q980.0,213.1 990.0,211.2 Q1000.0,209.2 1010.0,204.9 Q1020.0,200.5 1030.0,194.1 Q1040.0,187.7 1050.0,180.0 Q1060.0,172.4 1070.0,164.6 Q1080.0,156.8 1090.0,149.9 Q1100.0,143.1 1110.0,137.8 Q1120.0,132.6 1130.0,129.1 Q1140.0,125.6 1150.0,123.5 Q1160.0,121.4 1170.0,119.9 Q1180.0,118.4 1190.0,116.8 Q1200.0,115.2 1210.0,113.0 Q1220.0,110.9 1230.0,108.3 Q1240.0,105.7 1250.0,103.2 Q1260.0,100.7 1270.0,99.0 Q1280.0,97.2 1290.0,97.1 Q1300.0,96.9 1310.0,98.6 Q1320.0,100.3 1330.0,103.6 Q1340.0,107.0 1350.0,111.2 Q1360.0,115.5 1370.0,119.6 Q1380.0,123.7 1390.0,126.7 Q1400.0,129.7 1410.0,130.9 Q1420.0,132.0 1430.0,131.4 Q1440.0,130.7 1450.0,128.6 Q1460.0,126.6 1470.0,124.1 Q1480.0,121.6 1490.0,119.6 Q1500.0,117.6 1510.0,116.7 Q1520.0,115.9 1530.0,116.5 Q1540.0,117.0 1550.0,118.6 Q1560.0,120.2 1570.0,122.2 Q1580.0,124.2 1590.0,125.9 L1600,127.6 L1600,420 Z", "fore": "M0,360 L0,112.4 Q0.0,112.4 10.0,106.0 Q20.0,99.6 30.0,93.8 Q40.0,87.9 50.0,84.4 Q60.0,80.9 70.0,80.7 Q80.0,80.6 90.0,83.3 Q100.0,86.0 110.0,89.9 Q120.0,93.8 130.0,96.8 Q140.0,99.7 150.0,100.3 Q160.0,100.9 170.0,99.0 Q180.0,97.0 190.0,93.7 Q200.0,90.3 210.0,87.3 Q220.0,84.3 230.0,82.9 Q240.0,81.5 250.0,81.9 Q260.0,82.2 270.0,83.3 Q280.0,84.3 290.0,84.4 Q300.0,84.5 310.0,82.6 Q320.0,80.6 330.0,76.6 Q340.0,72.6 350.0,68.0 Q360.0,63.5 370.0,60.3 Q380.0,57.2 390.0,57.3 Q400.0,57.4 410.0,61.1 Q420.0,64.9 430.0,71.4 Q440.0,77.9 450.0,85.2 Q460.0,92.6 470.0,98.8 Q480.0,105.1 490.0,109.5 Q500.0,113.9 510.0,116.7 Q520.0,119.6 530.0,122.4 Q540.0,125.1 550.0,129.0 Q560.0,132.9 570.0,138.5 Q580.0,144.0 590.0,150.2 Q600.0,156.5 610.0,161.6 Q620.0,166.8 630.0,169.0 Q640.0,171.3 650.0,169.8 Q660.0,168.3 670.0,163.8 Q680.0,159.2 690.0,153.4 Q700.0,147.5 710.0,142.5 Q720.0,137.5 730.0,134.7 Q740.0,132.0 750.0,131.4 Q760.0,130.9 770.0,131.4 Q780.0,131.9 790.0,131.8 Q800.0,131.7 810.0,129.9 Q820.0,128.1 830.0,124.8 Q840.0,121.5 850.0,117.9 Q860.0,114.3 870.0,112.2 Q880.0,110.0 890.0,110.4 Q900.0,110.8 910.0,113.4 Q920.0,116.1 930.0,119.5 Q940.0,123.0 950.0,125.1 Q960.0,127.2 970.0,126.4 Q980.0,125.6 990.0,121.6 Q1000.0,117.5 1010.0,111.3 Q1020.0,105.1 1030.0,98.7 Q1040.0,92.2 1050.0,87.3 Q1060.0,82.3 1070.0,79.5 Q1080.0,76.7 1090.0,75.4 Q1100.0,74.2 1110.0,73.0 Q1120.0,71.8 1130.0,69.4 Q1140.0,67.0 1150.0,63.2 Q1160.0,59.4 1170.0,55.1 Q1180.0,50.9 1190.0,48.1 Q1200.0,45.3 1210.0,45.7 Q1220.0,46.0 1230.0,50.2 Q1240.0,54.4 1250.0,61.5 Q1260.0,68.7 1270.0,76.8 Q1280.0,85.0 1290.0,92.0 Q1300.0,99.1 1310.0,103.8 Q1320.0,108.5 1330.0,110.9 Q1340.0,113.4 1350.0,114.9 Q1360.0,116.3 1370.0,118.4 Q1380.0,120.4 1390.0,123.9 Q1400.0,127.3 1410.0,131.8 Q1420.0,136.3 1430.0,140.5 Q1440.0,144.6 1450.0,146.6 Q1460.0,148.6 1470.0,147.6 Q1480.0,146.6 1490.0,142.9 Q1500.0,139.3 1510.0,134.7 Q1520.0,130.0 1530.0,126.5 Q1540.0,123.1 1550.0,122.3 Q1560.0,121.5 1570.0,123.6 Q1580.0,125.7 1590.0,129.4 L1600,133.2 L1600,360 Z"};
+const ridge = (k, h, fill) => `<svg viewBox="0 0 1600 ${h}" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path d="${RIDGES[k]}" fill="${fill}"/></svg>`;
+
 function landing() {
   return layout({ title: 'Deliver your work beautifully', bodyClass: 'landing', header: amNav(), scripts: ['/static/spiral.js', '/static/landing.js'], body: `
 <section class="fs-hero light" data-header-theme="dark">
@@ -224,6 +243,23 @@ function landing() {
     <p class="fs-mono">Upload the shoot. Send one private link. Your client streams, views and downloads in full quality.</p>
     <a class="fs-cta" href="/signup">Start delivering</a>
   </div>
+</section>
+
+<section class="scene" id="preview" data-header-theme="light" aria-labelledby="scene-title">
+  <div class="scene-sky" aria-hidden="true"></div>
+  <div class="scene-layer scene-far" aria-hidden="true"><div class="scene-px" data-speed="69">${ridge('far', 500, '#3b2a3a')}</div></div>
+  <div class="scene-layer scene-near" aria-hidden="true"><div class="scene-px" data-speed="83">${ridge('near', 420, '#24191f')}</div></div>
+  <div class="scene-copy">
+    <span class="scene-chip">What your client sees</span>
+    <h2 class="scene-title" id="scene-title">Every delivery opens<br>like a premiere.</h2>
+    <p class="scene-sub">Full screen, on your cover, under your studio name. One private link, nothing to install.</p>
+    <a class="fs-cta" href="/signup">Start delivering</a>
+  </div>
+  <div class="scene-mock-wrap"><div class="scene-px scene-mock" data-speed="80">
+    <div class="mock-bar"><i></i><i></i><i></i><em>Private link · /d/golden-hour</em></div>
+    <img src="/static/scene-delivery.jpg" alt="A ContentFlows delivery page: Golden Hour, Campaign Finals for Maya Rivers, with a Download all button" loading="lazy" decoding="async" width="1440" height="900">
+  </div></div>
+  <div class="scene-layer scene-fore" aria-hidden="true">${ridge('fore', 360, '#111113')}</div>
 </section>
 
 <section class="flow-sec" id="try" data-header-theme="light" data-spiral-host>
@@ -240,12 +276,14 @@ function landing() {
   </div>
 </section>
 
+<div class="sec-stack">
 <section class="lp lp-light" data-header-theme="dark" id="why">
   <div class="lp-inner">
     <p class="lp-label reveal">(01) Why ContentFlows</p>
-    <h2 class="lp-statement reveal">Your work leaves the studio <span>exactly as you made it.</span></h2>
+    <h2 class="lp-statement" data-words>Your work leaves the studio <span>exactly as you made it. No compression, no watermarks, no surprises for your client.</span></h2>
   </div>
-  <div class="lp-inner pillar-grid">
+  <div class="lp-inner pillar-track">
+  <div class="pillar-grid">
     <article class="pillar reveal" id="quality">
       <div class="pv pv-quality" aria-hidden="true">
         <div class="pvq-row"><em>Original</em><span>campaign_031.tif</span><b>248.6 MB</b></div>
@@ -279,6 +317,7 @@ function landing() {
       <p>No account, no app. Opens on any device.</p>
     </article>
   </div>
+  </div>
 </section>
 
 <section class="lp lp-dark" data-header-theme="light" id="professional">
@@ -294,7 +333,7 @@ function landing() {
         <li>Switch off downloads or replace a link in one click</li>
       </ul>
     </div>
-    <div class="mock reveal" aria-hidden="true">
+    <div class="mock reveal" data-speed="90" aria-hidden="true">
       <div class="mock-bar"><i></i><i></i><i></i><em>Private link · /d/golden-hour</em></div>
       <div class="mock-hero">
         <div class="mock-title">Golden Hour Campaign<br><span>for Maya Rivers.</span></div>
@@ -327,19 +366,62 @@ function landing() {
   </div>
 </section>
 
+<section class="lp lp-dark lp-new" data-header-theme="light" id="new">
+  <div class="lp-inner">
+    <p class="lp-label reveal">(04) New in ContentFlows</p>
+    <h2 class="lp-heading reveal">Less busywork. <span>More time behind the camera.</span></h2>
+  </div>
+  <div class="lp-inner new-brands reveal" aria-label="Works together">
+    <a class="nb-tile" href="/signup"><span class="nb-logo">${LOGO}</span><span class="nb-cap">Deliver your work</span></a>
+    <span class="nb-plus" aria-hidden="true">+</span>
+    <a class="nb-tile" href="${VAULT_SITE}" target="_blank" rel="noopener"><span class="nb-logo">${VAULT_LOGO}</span><span class="nb-cap">Store every shoot · vaultcontentflows.com</span></a>
+  </div>
+  <div class="lp-inner new-grid">
+    <article class="new-card reveal" id="connect-ai">
+      <div class="nv nv-ai" data-speed="93" aria-hidden="true">
+        <div class="nva-msg you">Create a photoshoot delivery for Ana López, add the photos from this Dropbox link and send me the link.</div>
+        <div class="nva-msg ai">
+          <span class="nva-tool">${SYMBOL()}<em>ContentFlows</em><b>3 actions</b></span>
+          <p>Done. 48 photos added to <b>Ana López — Editorial</b>.</p>
+          <span class="nva-link">contentflows.app/d/ana-lopez</span>
+        </div>
+      </div>
+      <span class="pillar-num"><span class="new-pill">New</span> Connect AI</span>
+      <h3>Just ask your AI assistant.</h3>
+      <p>Connect ContentFlows to Claude, ChatGPT or Cursor. Create deliveries, add files from links, set passwords and expiry dates, and see who downloaded, all by asking.</p>
+      <a class="fs-cta new-cta" href="/signup">Connect your AI</a>
+    </article>
+    <article class="new-card reveal" id="vault">
+      <div class="nv nv-vault" data-speed="88" aria-hidden="true">
+        <div class="nvv-head"><em>Add from Vault</em><span>Vault / 2026 / Golden Hour</span></div>
+        <div class="nvv-row on"><i></i><span>hero_cut_4K.mov</span><b>8.4 GB</b></div>
+        <div class="nvv-row on"><i></i><span>campaign_031.tif</span><b>248.6 MB</b></div>
+        <div class="nvv-row"><i></i><span>bts_selects.zip</span><b>2.1 GB</b></div>
+        <div class="nvv-row on"><i></i><span>poster_final.jpg</span><b>18.2 MB</b></div>
+        <div class="nvv-foot"><span>3 files · server to server</span><b>Add files</b></div>
+      </div>
+      <span class="pillar-num"><span class="new-pill">New</span> ContentFlows Vault</span>
+      <h3>Your archive, one click from every delivery.</h3>
+      <p>Keep every shoot in your Vault and pull the finals into any delivery. Files copy at full quality, server to server, so big videos never go through your computer.</p>
+      <a class="fs-cta new-cta ghost" href="${VAULT_SITE}" target="_blank" rel="noopener">Explore the Vault</a>
+    </article>
+  </div>
+</section>
+
 ${homePricing()}
+</div>
 
 <section class="arch" aria-hidden="true"><div class="arch-layer"><img src="/static/arch.jpg" alt="" decoding="async"></div></section>
 <footer class="end" data-header-theme="light">
   <div class="end-inner">
-    <p class="lp-label">(05) Start delivering</p>
+    <p class="lp-label">(06) Start delivering</p>
     <h2 class="end-title">Deliver your next project<br><span>the way it deserves.</span></h2>
     <p class="end-sub">Create your studio in under a minute. Send your first delivery today.</p>
     <a class="fs-cta" href="/signup">Start delivering</a>
     <div class="end-rule"></div>
-    <nav class="end-links" aria-label="Footer"><a href="/signup">Sign up</a><a href="/login">Log in</a><a href="#why">Why us</a><a href="#how">How it works</a><a href="#pricing">Pricing</a></nav>
+    <nav class="end-links" aria-label="Footer"><a href="/signup">Sign up</a><a href="/login">Log in</a><a href="#why">Why us</a><a href="#how">How it works</a><a href="#new">AI and Vault</a><a href="#pricing">Pricing</a></nav>
   </div>
-  <div class="end-foot"><a class="foot-logo" href="/" aria-label="ContentFlows home">${LOGO}</a><span class="fs-mono">Final work delivery for creatives</span></div>
+  <div class="end-foot"><a class="foot-logo" href="/" aria-label="ContentFlows home">${LOGO}</a><a class="foot-vault" href="${VAULT_SITE}" target="_blank" rel="noopener" aria-label="Vault Me">${VAULT_LOGO}</a><span class="fs-mono">Final work delivery for creatives</span></div>
 </footer>` });
 }
 
@@ -384,19 +466,99 @@ function storageMeter({ used, plan }, { compact = false } = {}) {
   </div>`;
 }
 
-function dashboard({ user, projects, usage }) {
-  return layout({ title: 'Deliveries', user, current: '/dashboard', body: `
+// The opt-in switch for auto-delete and its countdown length, on the New delivery form and in Settings.
+function autoDeleteField(p) {
+  return `<div class="auto-delete-field">
+    <label class="check"><input type="checkbox" name="auto_delete" ${p.auto_delete ? 'checked' : ''}> Delete this delivery and its files after the client downloads</label>
+    <label class="days">Countdown <input type="number" name="auto_delete_days" min="1" max="${retention.MAX_DAYS}" step="1" value="${retention.daysOf(p)}" aria-label="Days after the first download"> days after the client's first download${p.auto_delete && p.delete_at ? ` <span class="muted">(deletes ${fmtDate(p.delete_at)})</span>` : ''}</label>
+  </div>`;
+}
+
+// The creator's Vault (their storage platform). Overridable so a self-hosted Vault can be linked instead.
+const VAULT_SITE = (process.env.VAULT_SITE_URL || 'https://www.vaultcontentflows.com').replace(/\/$/, '');
+
+// Dashboard card telling creators about Add from Vault. Shown until they connect a Vault or close it.
+const vaultPromo = () => `<section class="vault-promo" id="vault-promo" aria-labelledby="vault-promo-title">
+    <div class="vp-mark" aria-hidden="true">${SYMBOL()}</div>
+    <div class="vp-copy">
+      <p class="vp-eyebrow"><span class="new-pill">New</span> ContentFlows Vault</p>
+      <h2 id="vault-promo-title">Add files straight from your Vault</h2>
+      <p class="muted">Connect your Vault once and every delivery gets an <b>Add from Vault</b> button. Files copy over at full quality, server to server, so big videos never go through your computer.</p>
+      <div class="vp-actions">
+        <a class="btn" href="/connect#vault">Connect your Vault</a>
+        <a class="btn ghost" href="${VAULT_SITE}" target="_blank" rel="noopener">Open the Vault</a>
+      </div>
+    </div>
+    <form method="post" action="/vault-promo/hide" class="vp-close" data-vault-promo-hide>
+      <button class="vp-x" aria-label="Hide this">×</button>
+    </form>
+  </section>
+  <script>(() => { const f = document.querySelector('[data-vault-promo-hide]'); if (!f) return;
+    f.addEventListener('submit', (e) => { e.preventDefault(); document.getElementById('vault-promo').remove();
+      fetch(f.action, { method: 'POST', headers: { Accept: 'application/json' } }).catch(() => {}); }); })();</script>`;
+
+// Initials for a profile with no photo yet: "Lumen Studio" → "LS".
+const initials = (s) => String(s || '').trim().split(/\s+/).slice(0, 2).map((w) => w[0] || '').join('').toUpperCase() || 'CF';
+const CAMERA = '<svg class="ui-ico" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
+const fmtCount = (n) => (n >= 10000 ? `${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}k` : String(n));
+
+// A file picker that uploads the moment a photo is chosen, from the Deliveries page.
+const photoPicker = (kind, label, cls) => `<form method="post" action="/profile/photo" enctype="multipart/form-data" class="photo-form ${cls}">
+    <input type="hidden" name="kind" value="${kind}"><input type="hidden" name="back" value="dashboard">
+    <label class="photo-pick" title="${label}">${CAMERA}<span>${label}</span><input type="file" name="photo" accept="image/jpeg,image/png,image/webp" required hidden></label>
+  </form>`;
+
+// The top of the Deliveries page, laid out like a profile: header photo, profile photo, name, bio, numbers.
+function profileHero(user, projects, usage) {
+  const name = user.studio || user.name;
+  const downloads = projects.reduce((n, p) => n + (p.download_count || 0), 0);
+  const views = projects.reduce((n, p) => n + (p.view_count || 0), 0);
+  const stored = usage ? usage.used : projects.reduce((n, p) => n + (p.total_size || 0), 0);
+  const stat = (v, l) => `<li><b>${v}</b><span>${l}</span></li>`;
+  return `<section class="ph" aria-label="Your profile">
+    <div class="ph-cover${user.header_photo ? '' : ' empty'}">
+      ${user.header_photo ? `<img src="/brand/${esc(user.header_photo)}" alt="">` : ''}
+      ${photoPicker('header', user.header_photo ? 'Change header' : 'Add header photo', 'ph-cover-edit')}
+    </div>
+    <div class="ph-bar">
+      <div class="ph-avatar">
+        ${user.avatar ? `<img src="/brand/${esc(user.avatar)}" alt="${esc(name)}">` : `<span class="ph-initials" aria-hidden="true">${esc(initials(name))}</span>`}
+        ${photoPicker('avatar', user.avatar ? 'Change profile photo' : 'Add profile photo', 'ph-avatar-edit')}
+      </div>
+      <div class="ph-id">
+        <h1>${esc(name)}</h1>
+        ${user.bio ? `<p class="ph-bio">${esc(user.bio)}</p>` : '<p class="ph-bio muted"><a class="link" href="/profile#look">Add a short bio</a> so clients know who you are</p>'}
+      </div>
+      <div class="ph-actions">
+        <a class="btn ghost" href="/profile#look">Edit profile</a>
+        <a class="btn" href="#new">New delivery</a>
+      </div>
+    </div>
+    <ul class="ph-stats">
+      ${stat(projects.length, projects.length === 1 ? 'Delivery' : 'Deliveries')}
+      ${stat(fmtSize(stored).replace(/\.0 /, ' '), 'Stored')}
+      ${stat(fmtCount(downloads), downloads === 1 ? 'Download' : 'Downloads')}
+      ${stat(fmtCount(views), views === 1 ? 'View' : 'Views')}
+    </ul>
+  </section>`;
+}
+
+function dashboard({ user, projects, usage, vaultPromo: showVaultPromo }) {
+  const unlimited = usage && usage.plan.limit === Infinity;
+  return layout({ title: 'Deliveries', user, current: '/dashboard', bodyClass: 'home-profile', scripts: ['/static/profile.js'], body: `
 <main class="wrap">
-  <div class="page-head"><div><h1>Deliveries</h1><p class="muted">${projects.length} project${projects.length === 1 ? '' : 's'}</p></div>
-  <a class="btn" href="#new">New delivery</a></div>
-  ${usage ? storageMeter(usage) : ''}
+  ${profileHero(user, projects, usage)}
+  ${usage && !unlimited ? storageMeter(usage) : ''}
+  ${showVaultPromo ? vaultPromo() : ''}
+  <div class="ph-section-head"><h2>Deliveries</h2>${projects.length ? `<span class="muted small">${projects.length} project${projects.length === 1 ? '' : 's'}</span>` : ''}</div>
   ${projects.length ? `<div class="cards">${projects.map((p) => `
     <a class="card" href="/projects/${p.id}">
       <div class="cover">${p.cover_thumb ? `<img src="/d/${p.share_token}/thumb/${p.cover_id}" alt="">` : '<div class="cover-empty"></div>'}</div>
       <div class="card-body"><span class="tag">${esc(TYPES[p.type] || p.type)}</span>
       <h3>${esc(p.title)}</h3>
       <p class="muted">${esc(p.client_name || 'No client set')} · ${p.asset_count} file${p.asset_count === 1 ? '' : 's'} · ${fmtSize(p.total_size || 0)}</p>
-      <p class="muted small">${p.download_count} download${p.download_count === 1 ? '' : 's'} · ${p.view_count} view${p.view_count === 1 ? '' : 's'}</p></div>
+      <p class="muted small">${p.download_count} download${p.download_count === 1 ? '' : 's'} · ${p.view_count} view${p.view_count === 1 ? '' : 's'}</p>
+      ${p.auto_delete && p.delete_at ? `<p class="small deleting">Deletes ${fmtDate(p.delete_at)}</p>` : ''}</div>
     </a>`).join('')}</div>`
   : `<div class="empty"><h2>No deliveries yet</h2><p class="muted">Create a delivery, upload the finals, and send your client the link.</p></div>`}
 </main>
@@ -405,6 +567,7 @@ function dashboard({ user, projects, usage }) {
   <label>Title<input name="title" required placeholder="Summer campaign — finals"></label>
   <label>Type<select name="type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>
   <div class="row"><label>Client name<input name="client_name"></label><label>Client email<input type="email" name="client_email"></label></div>
+  ${autoDeleteField({ auto_delete: 0 })}
   <div class="row form-end"><button type="button" class="btn ghost" onclick="this.closest('dialog').close(); history.replaceState(null, '', location.pathname)">Cancel</button><button class="btn">Create</button></div>
 </form></dialog>
 <script>(() => { const d = document.getElementById('new');
@@ -413,25 +576,85 @@ function dashboard({ user, projects, usage }) {
   d.addEventListener('close', () => location.hash === '#new' && history.replaceState(null, '', location.pathname)); })();</script>` });
 }
 
+// How the files inside a folder can be ordered. The creator picks one per folder; the client sees the same order.
+const SORTS = {
+  custom: 'Custom order',
+  name: 'Name A–Z',
+  name_desc: 'Name Z–A',
+  newest: 'Newest first',
+  oldest: 'Oldest first',
+  kind: 'Kind',
+  size: 'Largest first',
+};
+// A folder's order when the creator hasn't picked one: folders by name (files upload a few at a time and
+// land out of order, so name matches the uploader's computer); loose files in upload order.
+const sortOf = (sorts, folder) => (SORTS[sorts[folder]] ? sorts[folder] : folder ? 'name' : 'custom');
+const KIND_RANK = { image: 0, video: 1, audio: 2, file: 3 };
+const byName = (a, b) => a.original_name.localeCompare(b.original_name, undefined, { numeric: true, sensitivity: 'base' });
+const byUpload = (a, b) => (a.position - b.position) || (a.id - b.id);
+const added = (a) => a.created_at || '';
+const extOf = (a) => (a.original_name.includes('.') ? a.original_name.split('.').pop().toLowerCase() : '');
+const SORT_FNS = {
+  custom: byUpload,
+  name: (a, b) => byName(a, b) || byUpload(a, b),
+  name_desc: (a, b) => byName(b, a) || byUpload(a, b),
+  newest: (a, b) => added(b).localeCompare(added(a)) || (b.id - a.id),
+  oldest: (a, b) => added(a).localeCompare(added(b)) || (a.id - b.id),
+  kind: (a, b) => ((KIND_RANK[a.kind] ?? 9) - (KIND_RANK[b.kind] ?? 9)) || extOf(a).localeCompare(extOf(b)) || byName(a, b),
+  size: (a, b) => (b.size - a.size) || byName(a, b),
+};
+const sortFiles = (items, mode) => [...items].sort(SORT_FNS[mode] || byUpload);
+
 // Files grouped by the folder they were uploaded in: loose files first, then each folder in the
 // order its first file arrived. Folder paths show as "BTS / Raw".
 // Folders listed in `keep` (made by hand on the project page) show even while empty.
 // `order` is the creator's chosen folder order; folders not in it follow, in upload order.
-function byFolder(assets, keep = [], order = []) {
+// `sorts` maps a folder ('' = loose files) to how its files are ordered (see SORTS).
+function byFolder(assets, keep = [], order = [], sorts = {}) {
   const groups = new Map([['', []]]);
   for (const a of assets) {
     const f = a.folder || '';
     if (!groups.has(f)) groups.set(f, []);
     groups.get(f).push(a);
   }
-  // Files in a folder upload a few at a time and land out of order, so they're sorted by name like on the uploader's computer.
-  const byName = (a, b) => a.original_name.localeCompare(b.original_name, undefined, { numeric: true, sensitivity: 'base' });
   for (const f of keep) if (!groups.has(f)) groups.set(f, []);
   const rank = (f) => (f === '' ? -1 : order.includes(f) ? order.indexOf(f) : Infinity);
   return [...groups].filter(([folder, items]) => items.length || (folder && keep.includes(folder)))
     .sort(([a], [b]) => rank(a) - rank(b))
-    .map(([folder, items]) => ({ folder, label: folder.split('/').join(' / '), items: folder ? items.sort(byName) : items }));
+    .map(([folder, items]) => { const sort = sortOf(sorts, folder); return { folder, label: folder.split('/').join(' / '), sort, items: sortFiles(items, sort) }; });
 }
+// Small line icons for the Files tools and folder menus.
+const ico = (d) => `<svg class="ui-ico" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const UI_ICON = {
+  collapse: ico('<path d="m7 9 5-5 5 5M7 15l5 5 5-5"/>'),
+  check: ico('<rect x="4" y="4" width="16" height="16" rx="4"/><path d="m8.5 12 2.5 2.5 4.5-5"/>'),
+  folderPlus: ico('<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2.2h8.4A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/><path d="M12 10.5v6M9 13.5h6"/>'),
+  move: ico('<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2.2h8.4A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/><path d="M9 13.5h6M12.5 11l2.5 2.5-2.5 2.5"/>'),
+  dots: ico('<circle cx="5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="19" cy="12" r="1.2" fill="currentColor"/>'),
+  pen: ico('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>'),
+  link: ico('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>'),
+  sort: ico('<path d="M7 5v14M4 16l3 3 3-3M17 19V5M14 8l3-3 3 3"/>'),
+  trash: ico('<path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13"/>'),
+  close: ico('<path d="M6 6l12 12M18 6 6 18"/>'),
+  up: ico('<path d="M12 19V5M6 11l6-6 6 6"/>'),
+  down: ico('<path d="M12 5v14M6 13l6 6 6-6"/>'),
+  viewGrid: ico('<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>'),
+  viewSmall: ico('<rect x="3.5" y="3.5" width="4.5" height="4.5" rx="1"/><rect x="9.75" y="3.5" width="4.5" height="4.5" rx="1"/><rect x="16" y="3.5" width="4.5" height="4.5" rx="1"/><rect x="3.5" y="9.75" width="4.5" height="4.5" rx="1"/><rect x="9.75" y="9.75" width="4.5" height="4.5" rx="1"/><rect x="16" y="9.75" width="4.5" height="4.5" rx="1"/><rect x="3.5" y="16" width="4.5" height="4.5" rx="1"/><rect x="9.75" y="16" width="4.5" height="4.5" rx="1"/><rect x="16" y="16" width="4.5" height="4.5" rx="1"/>'),
+  viewList: ico('<rect x="3.5" y="5" width="4" height="4" rx="1"/><rect x="3.5" y="15" width="4" height="4" rx="1"/><path d="M11 7h9.5M11 17h9.5"/>'),
+};
+// How the creator sees their files: big thumbnails (the default), small thumbnails, or a list with full names.
+// The choice is kept on this device (see files.js) and set before the files draw, so the page doesn't jump.
+const FILE_VIEWS = [['grid', 'Large thumbnails', 'viewGrid'], ['small', 'Small thumbnails', 'viewSmall'], ['list', 'List', 'viewList']];
+const viewSwitch = () => `<div class="view-switch" role="group" aria-label="Show files as"><span class="muted small">View</span>
+  <span class="view-btns">${FILE_VIEWS.map(([k, label, icon]) => `<button type="button" class="view-btn" data-view="${k}" aria-pressed="${k === 'grid'}" title="${label}" aria-label="${label}">${UI_ICON[icon]}</button>`).join('')}</span></div>`;
+const KIND_LABEL = { image: 'Photo', video: 'Video', audio: 'Audio', file: 'File' };
+// The creator's "Sort" menu for one folder ('' = loose files). Changing it saves right away.
+const sortMenu = (p, g) => `<form method="post" action="/projects/${p.id}/folders/sort" class="folder-sort">
+  <input type="hidden" name="folder" value="${esc(g.folder)}">
+  <label><span class="muted small">Sort</span>
+  <select name="sort" data-autosubmit aria-label="Sort the files in ${esc(g.label || 'No folder')}">${Object.entries(SORTS).map(([k, v]) => `<option value="${k}"${g.sort === k ? ' selected' : ''}>${v}</option>`).join('')}</select></label>
+  <noscript><button class="btn ghost small">Sort</button></noscript>
+</form>`;
 const CHEVRON = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const FOLDER_ICON = '<svg class="folder-ico" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2.2h8.4A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>';
 
@@ -463,10 +686,10 @@ function mailBox(p, mail) {
   </form>`;
 }
 
-function projectPage({ user, project: p, assets, folders = [], collapsed = [], folderLinks = {}, folderOrder = [], stats, origin, saved, notice, mail = {}, direct, storageMissing, usage }) {
+function projectPage({ user, project: p, assets, folders = [], collapsed = [], folderLinks = {}, folderOrder = [], sorts = {}, stats, origin, saved, notice, mail = {}, direct, storageMissing, usage, vault }) {
   const link = `${origin}/d/${p.share_token}`;
   const left = usage && usage.plan.limit !== Infinity ? usage.plan.limit - usage.used : null;
-  return layout({ title: p.title, user, current: '/dashboard', scripts: ['/static/spiral.js', '/static/upload.js', '/static/files.js'], body: `
+  return layout({ title: p.title, user, current: '/dashboard', scripts: ['/static/spiral.js', '/static/upload.js', '/static/files.js', '/static/vault.js'], body: `
 <main class="wrap">
   <a class="back" href="/dashboard">← All deliveries</a>
   <div class="page-head"><div><span class="tag">${esc(TYPES[p.type] || p.type)}</span><h1>${esc(p.title)}</h1>
@@ -474,7 +697,11 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
   <a class="btn ghost" href="/d/${p.share_token}" target="_blank">Preview as client</a></div>
 
   <section class="share" id="share">
-    <div><h3>Delivery link</h3><p class="muted small">${p.password_hash ? 'Password protected' : 'Anyone with the link can view'}${p.expires_at ? ` · expires ${fmtDate(p.expires_at)}` : ''}${p.allow_download ? '' : ' · downloads off'}</p></div>
+    <div><h3>Delivery link</h3><p class="muted small">${p.password_hash ? 'Password protected' : 'Anyone with the link can view'}${p.expires_at ? ` · expires ${fmtDate(p.expires_at)}` : ''}${p.allow_download ? '' : ' · downloads off'}${p.auto_delete && !p.delete_at ? ` · deletes ${retention.daysText(retention.daysOf(p))} after the client's first download` : ''}</p></div>
+    ${p.auto_delete && p.delete_at ? `<div class="auto-delete">
+      <p><b>Deletes ${fmtDate(p.delete_at)}.</b> Your client downloaded this delivery, so it and all its files will be removed for good on ${fmtDate(p.delete_at)}.</p>
+      <form method="post" action="/projects/${p.id}/keep"><button class="btn ghost small">Keep this delivery</button></form>
+    </div>` : ''}
     <div class="copy"><input readonly value="${esc(link)}" id="share-link"><button class="btn" data-copy="#share-link">Copy</button></div>
     <div class="stats"><div><b>${stats.views}</b><span>views</span></div><div><b>${stats.downloads}</b><span>downloads</span></div><div><b>${stats.last ? fmtDate(stats.last) : '—'}</b><span>last activity</span></div></div>
     ${mailBox(p, mail)}
@@ -488,6 +715,7 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
         <input type="file" id="folder-input" webkitdirectory multiple hidden>
         <p><b>Drop files or folders here</b> or browse <button class="link" type="button" onclick="document.getElementById('file-input').click()">files</button> · <button class="link" type="button" onclick="document.getElementById('folder-input').click()">a folder</button></p>
         <p class="muted small">Photos, videos, audio, or any final files${direct ? ' · sent straight to cloud storage' : ''}${left > 0 ? ` · ${fmtSize(left)} left on your plan` : ''}</p>
+        <p class="vault-open-row">${vault ? '<button class="btn ghost small" type="button" data-vault-open>Add from Vault</button>' : '<span class="new-pill">New</span> <a class="link small" href="/connect#vault">Connect your Vault</a> <span class="muted small">to add files from it</span>'}</p>
         ${left !== null && left <= 0 ? `<p class="q-error">Your ${esc(usage.plan.name)} plan is full, so new files can't be added. <a href="/pricing">See plans</a> or delete files you no longer need.</p>` : ''}
         ${storageMissing ? `<p class="q-error">Cloud storage is off because ${esc(storageMissing.join(', '))} ${storageMissing.length === 1 ? 'is' : 'are'} not set in the server's variables.</p>` : ''}
         <div class="uploading" id="uploading" hidden>${SYMBOL('anim-loader')}<span id="uploading-text">Uploading</span></div>
@@ -496,75 +724,116 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
     </div>
   </section>
 
-  <section id="files" data-base="/projects/${p.id}">
+  ${vault ? `<dialog class="vault-picker" id="vault-picker" data-project="${p.id}">
+    <div class="vp-head"><h3>Add from Vault</h3><button class="link" type="button" data-vault-close aria-label="Close">Close</button></div>
+    <nav class="vp-path" aria-label="Vault folders"></nav>
+    <div class="vp-list" aria-live="polite"></div>
+    <div class="vp-foot">
+      <label class="vp-folder">Put in <select name="folder"><option value="">No folder</option>${[...new Set(folders.concat(assets.map((a) => a.folder).filter(Boolean)))].sort().map((f) => `<option value="${esc(f)}">${esc(f)}</option>`).join('')}</select></label>
+      <button class="btn" type="button" data-vault-add disabled>Add files</button>
+    </div>
+    <div class="vp-progress" hidden></div>
+  </dialog>` : ''}
+
+  <section id="files" data-base="/projects/${p.id}" data-view="grid">
+    <script>try { const v = localStorage.getItem('cf-files-view'); if (['small', 'list'].includes(v)) document.currentScript.parentNode.dataset.view = v; } catch (e) {}</script>
     <div class="files-head">
       <h2>Files <span class="muted">${assets.length}</span></h2>
       <div class="files-tools">
-        ${folders.length || assets.some((a) => a.folder) ? '<button class="btn ghost small" type="button" data-fold-all>Close all</button>' : ''}
-        ${assets.length ? '<button class="btn ghost small" type="button" data-select-all>Select all</button>' : ''}
-        <form method="post" action="/projects/${p.id}/folders" class="new-folder">
-          <input name="name" placeholder="New folder name" maxlength="100" required aria-label="New folder name">
-          <button class="btn ghost small">${FOLDER_ICON}Create folder</button>
-        </form>
+        ${folders.length || assets.some((a) => a.folder) ? `<button class="tool-btn" type="button" data-fold-all title="Close or open every folder">${UI_ICON.collapse}<span>Close all</span></button>` : ''}
+        ${assets.length ? `<button class="tool-btn" type="button" data-select-all title="Select every file">${UI_ICON.check}<span>Select all</span></button>` : ''}
+        <button class="tool-btn strong" type="button" data-new-folder aria-expanded="false" aria-controls="new-folder">${UI_ICON.folderPlus}<span>New folder</span></button>
       </div>
     </div>
+    <form method="post" action="/projects/${p.id}/folders" class="new-folder" id="new-folder" hidden>
+      <input name="name" placeholder="Folder name" maxlength="100" required aria-label="New folder name">
+      <button class="btn small">Create</button>
+      <button class="link small" type="button" data-new-folder-cancel>Cancel</button>
+    </form>
     ${notice ? `<p class="ok files-notice">${esc(notice)}</p>` : ''}
     ${(() => {
-      const groups = byFolder(assets, folders, folderOrder);
+      const groups = byFolder(assets, folders, folderOrder, sorts);
       if (!groups.length) return '<p class="muted">No files uploaded yet.</p>';
       const anyFolder = groups.some((g) => g.folder);
-      // With folders around, "No folder" always shows so files can be dragged back out.
-      if (anyFolder && groups[0].folder) groups.unshift({ folder: '', label: '', items: [] });
-      return groups.map((g) => { const shut = (g.folder || anyFolder) && collapsed.includes(g.folder); return `<div class="file-group${shut ? ' collapsed' : ''}" data-folder="${esc(g.folder)}">
-      ${g.folder || anyFolder ? `<div class="folder-head">
-        <button type="button" class="fold" aria-expanded="${shut ? 'false' : 'true'}" aria-label="${shut ? 'Open' : 'Close'} ${esc(g.label || 'No folder')}" title="Open or close this folder">${CHEVRON}</button>
-        ${g.items.length ? `<input type="checkbox" class="pick-group" aria-label="Select every file in ${esc(g.label || 'No folder')}">` : ''}
-        ${g.folder ? FOLDER_ICON : ''}<b class="fold-name">${esc(g.label || 'No folder')}</b> <span class="muted">${g.items.length}</span>
+      // With folders around, "No folder" is always in the page so files can be dragged back out.
+      // While it's empty it only shows during a drag.
+      if (anyFolder && groups[0].folder) groups.unshift({ folder: '', label: '', sort: sortOf(sorts, ''), items: [] });
+      // Without folders there's no folder bar, so the loose files' Sort menu sits with the tools above.
+      const sortsUp = !anyFolder;
+      const firstFolder = groups.find((x) => x.folder), lastGroup = groups[groups.length - 1];
+      // Folder tabs: "All" shows every folder; a folder's tab shows only that folder. Drag files onto a tab to move them there.
+      const tabs = anyFolder ? `<div class="folder-tabs" role="tablist" aria-label="Folders">
+        <button class="ftab" type="button" role="tab" data-tab="__all">All <span>${assets.length}</span></button>
+        ${groups.map((g) => `<button class="ftab${!g.folder && !g.items.length ? ' loose-empty' : ''}" type="button" role="tab" data-tab="${esc(g.folder)}" data-folder="${esc(g.folder)}" title="${g.folder ? 'Show only this folder' : 'Files not in a folder'}">${esc(g.label || 'No folder')} <span>${g.items.length}</span></button>`).join('')}
+      </div>` : '';
+      return `<div class="files-bar">${sortsUp && groups[0].items.length > 1 ? sortMenu(p, groups[0]) : ''}${assets.length ? viewSwitch() : ''}</div>` + tabs + groups.map((g) => {
+        const carded = g.folder || anyFolder;
+        const shut = carded && collapsed.includes(g.folder);
+        const name = esc(g.label || 'No folder');
+        const link = g.folder && folderLinks[g.folder];
+        const sortable = g.items.length > 1;
+        const hasMenu = g.folder || sortable;
+        return `<div class="file-group${carded ? ' fcard' : ''}${shut ? ' collapsed' : ''}${carded && !g.folder && !g.items.length ? ' loose-empty' : ''}" data-folder="${esc(g.folder)}">
+      ${carded ? `<div class="folder-head">
+        <button type="button" class="fold" aria-expanded="${shut ? 'false' : 'true'}" aria-label="${shut ? 'Open' : 'Close'} ${name}" title="Open or close this folder">${CHEVRON}</button>
+        ${g.items.length ? `<input type="checkbox" class="pick-group" aria-label="Select every file in ${name}">` : ''}
+        ${g.folder ? FOLDER_ICON : ''}<b class="fold-name">${name}</b> <span class="muted fold-count">${g.items.length}</span>
         ${g.folder ? `<form method="post" action="/projects/${p.id}/folders/rename" class="folder-rename" hidden>
           <input type="hidden" name="folder" value="${esc(g.folder)}">
           <input name="name" value="${esc(g.folder.split('/').pop())}" maxlength="100" required aria-label="New name for ${esc(g.label)}">
           <button class="btn small">Save</button><button class="link small" type="button" data-rename-cancel>Cancel</button>
         </form>` : ''}
-        ${g.folder ? `<div class="folder-actions">
-        <span class="folder-order">${['up', 'down'].map((d) => `<form method="post" action="/projects/${p.id}/folders/order"><input type="hidden" name="folder" value="${esc(g.folder)}"><input type="hidden" name="dir" value="${d}"><button class="order-btn" title="Move folder ${d}" aria-label="Move ${esc(g.label)} ${d}"${(d === 'up' ? g === groups.find((x) => x.folder) : g === groups[groups.length - 1]) ? ' disabled' : ''}>${d === 'up' ? '↑' : '↓'}</button></form>`).join('')}</span>
-        <button class="link small" type="button" data-rename>Rename</button>
-        ${folderLinks[g.folder] ? '' : `<form method="post" action="/projects/${p.id}/folders/link"><input type="hidden" name="folder" value="${esc(g.folder)}"><button class="link small" title="A link that opens only this folder">Share this folder</button></form>`}
-        <form method="post" action="/projects/${p.id}/folders/remove" class="folder-remove"${confirmAttr(g.items.length
-          ? `Remove the folder “${g.label}”? Its ${g.items.length} file${g.items.length === 1 ? '' : 's'} stay in the delivery and move up a level.`
-          : `Remove the empty folder “${g.label}”?`)}><input type="hidden" name="folder" value="${esc(g.folder)}"><button class="link small">Remove folder</button></form></div>` : ''}
-      </div>` : ''}
-      ${g.folder && folderLinks[g.folder] ? (() => { const id = `folder-link-${esc(folderLinks[g.folder])}`; return `<div class="folder-link">
+        ${hasMenu ? `<button type="button" class="menu-btn" data-folder-menu aria-haspopup="true" aria-expanded="false" aria-label="Options for ${name}" title="Folder options">${UI_ICON.dots}</button>
+        <div class="folder-menu" hidden>
+          <div class="menu-head">${g.folder ? FOLDER_ICON : ''}<b>${name}</b><span class="muted">${g.items.length} file${g.items.length === 1 ? '' : 's'}</span>
+            ${g.folder ? `<span class="folder-order">${['up', 'down'].map((d) => `<form method="post" action="/projects/${p.id}/folders/order"><input type="hidden" name="folder" value="${esc(g.folder)}"><input type="hidden" name="dir" value="${d}"><button class="order-btn" title="Move folder ${d}" aria-label="Move ${esc(g.label)} ${d}"${(d === 'up' ? g === firstFolder : g === lastGroup) ? ' disabled' : ''}>${UI_ICON[d]}</button></form>`).join('')}</span>` : ''}
+          </div>
+          ${g.folder ? `<button class="menu-item" type="button" data-rename>${UI_ICON.pen}<span>Rename</span></button>` : ''}
+          ${g.folder && !link ? `<form method="post" action="/projects/${p.id}/folders/link"><input type="hidden" name="folder" value="${esc(g.folder)}"><button class="menu-item">${UI_ICON.link}<span>Share this folder<small>A link that opens only this folder</small></span></button></form>` : ''}
+          ${sortable ? `<div class="menu-item menu-sort">${UI_ICON.sort}<span>Sort files</span>${sortMenu(p, g)}</div>` : ''}
+          ${g.folder ? `<div class="menu-sep"></div>
+          <form method="post" action="/projects/${p.id}/folders/remove"${confirmAttr(g.items.length
+            ? `Remove the folder “${g.label}”? Its ${g.items.length} file${g.items.length === 1 ? '' : 's'} stay in the delivery and move up a level.`
+            : `Remove the empty folder “${g.label}”?`)}><input type="hidden" name="folder" value="${esc(g.folder)}"><button class="menu-item danger">${UI_ICON.trash}<span>Remove folder<small>${g.items.length ? 'Its files stay in the delivery' : 'The folder is empty'}</small></span></button></form>` : ''}
+        </div>` : ''}
+      </div>
+      ${sortable || link ? `<div class="folder-meta">${sortable ? `<button type="button" class="chip" data-folder-menu title="Change how these files are sorted">${UI_ICON.sort}${SORTS[g.sort]}</button>` : ''}${link ? '<span class="chip on"><i></i>Folder link on</span>' : ''}</div>` : ''}` : ''}
+      ${link ? (() => { const id = `folder-link-${esc(link)}`; return `<div class="folder-link">
         <span class="small muted">Folder link · only shows this folder</span>
-        <div class="copy"><input readonly id="${id}" value="${esc(`${origin}/d/${folderLinks[g.folder]}`)}"><button class="btn small" type="button" data-copy="#${id}">Copy</button></div>
-        <a class="link small" href="/d/${esc(folderLinks[g.folder])}" target="_blank">Preview</a>
+        <div class="copy"><input readonly id="${id}" value="${esc(`${origin}/d/${link}`)}"><button class="btn small" type="button" data-copy="#${id}">Copy</button></div>
+        <a class="link small" href="/d/${esc(link)}" target="_blank">Preview</a>
         <form method="post" action="/projects/${p.id}/folders/link"${confirmAttr(`Turn off the link for “${g.label}”? Anyone who has it will no longer be able to open it.`)}><input type="hidden" name="folder" value="${esc(g.folder)}"><input type="hidden" name="on" value="0"><button class="link small danger">Turn off link</button></form>
       </div>`; })() : ''}
-      ${g.items.length ? `<div class="asset-grid">${g.items.map((a) => `
+      ${g.items.length ? `<div class="asset-grid"${g.sort === 'custom' && g.items.length > 1 ? ' data-custom' : ''}>${g.items.map((a, i) => `
       <div class="asset" data-id="${a.id}" draggable="true">
         <label class="pick" title="Select"><input type="checkbox" name="ids" value="${a.id}" form="bulk" aria-label="Select ${esc(a.original_name)}"></label>
         <div class="thumb">${a.thumb_name ? `<img loading="lazy" draggable="false" src="/d/${p.share_token}/thumb/${a.id}" alt="">` : `<div class="file-icon">${esc((a.original_name.split('.').pop() || 'file').toUpperCase())}</div>`}
-        ${a.kind === 'video' ? '<span class="badge">▶ Video</span>' : ''}${p.cover_asset_id === a.id ? '<span class="badge left">Cover</span>' : ''}</div>
-        <div class="asset-meta"><span title="${esc(a.original_name)}">${esc(a.original_name)}</span><span class="muted small">${fmtSize(a.size)} · ${a.downloads} dl</span></div>
+        ${a.kind === 'video' ? '<span class="badge">▶<span> Video</span></span>' : ''}${p.cover_asset_id === a.id ? '<span class="badge left">Cover</span>' : ''}</div>
+        <div class="asset-meta"><span class="a-name" title="${esc(a.original_name)}">${esc(a.original_name).replace(/([_.-])/g, '$1<wbr>')}</span><span class="muted small a-sub"><span class="a-ext">${esc(extOf(a).toUpperCase() || KIND_LABEL[a.kind] || 'File')} · </span>${fmtSize(a.size)} · ${a.downloads} dl</span></div>
+        <div class="a-cols"><span class="a-kind">${esc(KIND_LABEL[a.kind] || 'File')}${extOf(a) ? ` <span class="muted">${esc(extOf(a).toUpperCase())}</span>` : ''}</span><span class="a-size">${fmtSize(a.size)}</span><span class="a-dl">${a.downloads} download${a.downloads === 1 ? '' : 's'}</span><span class="a-date muted">${fmtDate(a.created_at)}</span></div>
         <div class="asset-actions">
+          ${g.sort === 'custom' && g.items.length > 1 ? `<span class="nudge">${['up', 'down'].map((d) => `<form method="post" action="/projects/${p.id}/assets/${a.id}/nudge"><input type="hidden" name="dir" value="${d}"><button class="order-btn" title="Move ${d === 'up' ? 'earlier' : 'later'}" aria-label="Move ${esc(a.original_name)} ${d === 'up' ? 'earlier' : 'later'}"${(d === 'up' ? i === 0 : i === g.items.length - 1) ? ' disabled' : ''}><span class="h">${d === 'up' ? '←' : '→'}</span><span class="v">${d === 'up' ? '↑' : '↓'}</span></button></form>`).join('')}</span>` : ''}
           ${a.thumb_name || a.kind === 'video' ? `<form method="post" action="/projects/${p.id}/cover/${a.id}"><button class="link small">Set cover</button></form>` : ''}
           <form method="post" action="/projects/${p.id}/assets/${a.id}/delete" onsubmit="return confirm('Delete this file?')"><button class="link small danger">Delete</button></form>
         </div>
-      </div>`).join('')}</div>` : `<div class="folder-empty">${g.folder ? 'Empty folder. Drag files here, or select files and choose Move.' : 'Every file is in a folder. Drag files here to take them out.'}</div>`}
+      </div>`).join('')}</div>` : `<div class="folder-empty">${g.folder ? 'Empty folder. Drag files here, or select files and choose Move.' : 'Drop here to take files out of their folder.'}</div>`}
     </div>`; }).join('');
     })()}
+    <div class="menu-scrim" hidden></div>
     ${assets.length ? `<form method="post" action="/projects/${p.id}/assets/move" id="bulk" class="bulk-bar" hidden>
       <span class="bulk-count" data-count>0 selected</span>
-      <label class="bulk-move">Move to
-        <select name="folder">
+      <label class="bulk-move">${UI_ICON.move}
+        <select name="folder" aria-label="Move the selected files to">
+          <option value="__pick" disabled selected hidden>Move to…</option>
           <option value="">No folder</option>
-          ${[...new Set([...byFolder(assets, folders, folderOrder).map((g) => g.folder).filter(Boolean)])].map((f) => `<option value="${esc(f)}">${esc(f.split('/').join(' / '))}</option>`).join('')}
+          ${[...new Set([...byFolder(assets, folders, folderOrder, sorts).map((g) => g.folder).filter(Boolean)])].map((f) => `<option value="${esc(f)}">${esc(f.split('/').join(' / '))}</option>`).join('')}
           <option value="__new">New folder…</option>
         </select>
       </label>
       <input name="new_folder" placeholder="Folder name" maxlength="100" hidden aria-label="New folder name">
-      <button class="btn small">Move</button>
-      <button class="btn ghost small danger" formaction="/projects/${p.id}/assets/delete" data-delete>Delete</button>
-      <button class="link small" type="button" data-clear>Clear</button>
+      <button class="btn small" data-move-go hidden>Move</button>
+      <button class="bulk-icon danger" formaction="/projects/${p.id}/assets/delete" data-delete title="Delete the selected files" aria-label="Delete the selected files">${UI_ICON.trash}</button>
+      <button class="bulk-icon" type="button" data-clear title="Clear the selection" aria-label="Clear the selection">${UI_ICON.close}</button>
     </form>` : ''}
   </section>
 
@@ -579,6 +848,7 @@ function projectPage({ user, project: p, assets, folders = [], collapsed = [], f
       <div class="row"><label>Password <span class="muted">${p.password_hash ? '(set, leave blank to keep)' : '(optional)'}</span><input type="password" name="password" autocomplete="new-password"></label>
       <label>Expires on <span class="muted">(optional)</span><input type="date" name="expires_at" value="${esc(p.expires_at || '')}"></label></div>
       <label class="check"><input type="checkbox" name="allow_download" ${p.allow_download ? 'checked' : ''}> Allow client downloads</label>
+      ${autoDeleteField(p)}
       ${p.password_hash ? '<label class="check"><input type="checkbox" name="remove_password"> Remove password</label>' : ''}
       <div class="row form-end"><button class="btn">Save settings</button></div>
     </form>
@@ -691,7 +961,7 @@ function unlockPage({ project, studio, brand, error }) {
 
 // Connect AI: API keys for the MCP server (/mcp), and how to add ContentFlows to an assistant.
 // fresh: a key just made, shown this once with its connector address.
-function connectPage({ user, keys, origin, fresh, error }) {
+function connectPage({ user, keys, origin, fresh, error, vault, vaultError, vaultValues = {}, vaultNotice, google, googleError, googleNotice }) {
   const exampleUrl = fresh ? fresh.url : `${origin}/mcp/cf_your-key`;
   return layout({ title: 'Connect AI', user, current: '/connect', scripts: ['/static/upload.js'], body: `
 <main class="wrap connect">
@@ -703,6 +973,36 @@ function connectPage({ user, keys, origin, fresh, error }) {
     <div class="copy"><input readonly value="${esc(fresh.url)}" id="mcp-url"><button class="btn" type="button" data-copy="#mcp-url">Copy</button></div>
     <div class="copy"><input readonly value="${esc(fresh.key)}" id="mcp-key" aria-label="API key on its own"><button class="btn ghost" type="button" data-copy="#mcp-key">Copy key</button></div>
   </section>` : ''}
+
+  ${google ? `<section class="settings vault-connect" id="google">
+    <h2>Google Drive</h2>
+    <p class="muted">Let your AI assistant copy files from your Google Drive into a delivery. They don't need to be shared publicly: ContentFlows reads them with your permission and copies them at full quality, server to server. Access is read-only, and you can disconnect any time.</p>
+    ${googleNotice ? `<p class="ok">${esc(googleNotice)}</p>` : ''}
+    ${googleError ? `<p class="error">${esc(googleError)}</p>` : ''}
+    ${google.connected ? `<div class="key-row"><div><b>Connected</b>${google.email ? ` <span class="muted small">${esc(google.email)}</span>` : ''}
+        <p class="muted small">Try: "Add the videos in this Drive folder to the Ana López delivery."</p></div>
+        <form method="post" action="/connect/google/remove"${confirmAttr('Disconnect Google Drive? Files already added to deliveries stay where they are.')}><button class="btn ghost danger">Disconnect</button></form>
+      </div>` : `<form method="post" action="/connect/google" class="key-form"><button class="btn">Connect Google Drive</button></form>`}
+  </section>` : ''}
+
+  <section class="settings vault-connect" id="vault">
+    <h2>Your Vault</h2>
+    <p class="muted">Connect your storage Vault to pick files from it inside any delivery. Files are copied from the Vault at full quality, server to server, so big videos don't need to go through your computer.</p>
+    ${vaultNotice ? `<p class="ok">${esc(vaultNotice)}</p>` : ''}
+    ${vaultError ? `<p class="error">${esc(vaultError)}</p>` : ''}
+    ${vault ? `<div class="key-row"><div><b>Connected</b> <span class="muted small mono">${esc(vault.address.replace(/^https?:\/\//, ''))}</span>
+        ${vault.email ? `<p class="muted small">Vault account: ${esc(vault.email)}</p>` : ''}</div>
+        <form method="post" action="/connect/vault/remove"${confirmAttr('Disconnect your Vault? Files already added to deliveries stay where they are.')}><button class="btn ghost danger">Disconnect</button></form>
+      </div>` : `<ol class="muted small vault-steps">
+        <li>In <a href="${VAULT_SITE}" target="_blank" rel="noopener">your Vault</a>, open <b>Security → Connected apps</b> and choose <b>Make a key</b>.</li>
+        <li>Paste your Vault's address and the key below.</li>
+      </ol>
+      <form method="post" action="/connect/vault" class="key-form vault-form">
+        <label>Vault address<input name="address" required placeholder="storage.yourstudio.com" value="${esc(vaultValues.address || '')}" autocomplete="off"></label>
+        <label>Access key<input name="key" required placeholder="spk_…" autocomplete="off" spellcheck="false"></label>
+        <button class="btn">Connect</button>
+      </form>`}
+  </section>
 
   <section class="settings">
     <h2>API keys</h2>
@@ -732,6 +1032,8 @@ function connectPage({ user, keys, origin, fresh, error }) {
     <h3>Things to ask</h3>
     <ul class="muted">
       <li>"Create a photoshoot delivery for Ana López, add the photos from this Dropbox link, and give me the link."</li>
+      <li>"Add the videos in my Drive folder &quot;Finals&quot; to Ana's delivery, in a folder called Reels." (connect Google Drive above first)</li>
+      <li>"Upload the videos in my Desktop folder Finals to Ana's delivery." (in Claude Desktop with folder access, or Claude Code: Claude sends them from your computer straight to the delivery)</li>
       <li>"Put a password on the Nike commercial delivery and make it expire at the end of the month."</li>
       <li>"Which deliveries haven't been downloaded yet?"</li>
     </ul>
@@ -742,6 +1044,23 @@ function connectPage({ user, keys, origin, fresh, error }) {
 // Profile: the creator's own account in one place. Their name and login email, the brand/studio
 // name every plan shows clients, the logo that replaces it on Pro and up, and their password.
 // section: which form an error belongs to, so it shows next to that form.
+// One photo on the Profile page: a preview with Upload/Replace and Remove.
+function photoSlot(user, kind, title, hint) {
+  const file = kind === 'avatar' ? user.avatar : user.header_photo;
+  return `<div class="look-slot look-${kind}">
+    <div class="look-preview${file ? '' : ' empty'}">${file ? `<img src="/brand/${esc(file)}" alt="${esc(title)}">` : `<span>${kind === 'avatar' ? esc(initials(user.studio || user.name)) : 'No header yet'}</span>`}</div>
+    <div class="logo-info"><h3>${title}</h3><p class="muted small">${hint}</p>
+      <div class="row">
+        <form method="post" action="/profile/photo" enctype="multipart/form-data" class="photo-form">
+          <input type="hidden" name="kind" value="${kind}">
+          <label class="btn ghost small file-btn">${file ? 'Replace' : 'Upload'}<input type="file" name="photo" accept="image/jpeg,image/png,image/webp" required hidden></label>
+        </form>
+        ${file ? `<form method="post" action="/profile/photo/remove"><input type="hidden" name="kind" value="${kind}"><button class="btn ghost small danger">Remove</button></form>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+
 function profilePage({ user, canBrand, mailOn, notice, error, section, values = {} }) {
   const name = user.studio || user.name;
   const err = (s) => (error && section === s ? `<p class="error">${esc(error)}</p>` : '');
@@ -765,9 +1084,23 @@ function profilePage({ user, canBrand, mailOn, notice, error, section, values = 
   return layout({ title: 'Profile', user, current: '/profile', scripts: ['/static/profile.js'], body: `
 <main class="wrap profile">
   <div class="page-head"><div><h1>Profile</h1>
-  <p class="muted">Your account, and how your studio appears to clients on every delivery.</p></div></div>
+  <p class="muted">Your account, your profile page, and how your studio appears to clients on every delivery.</p></div></div>
   ${notice ? `<p class="notice">${esc(notice)}</p>` : ''}
-  ${error && !['details', 'password', 'brand'].includes(section) ? `<p class="error">${esc(error)}</p>` : ''}
+  ${error && !['details', 'password', 'brand', 'look'].includes(section) ? `<p class="error">${esc(error)}</p>` : ''}
+
+  <section class="settings" id="look">
+    <h2>Profile page</h2>
+    <p class="muted small">Your Deliveries page opens with these, like a profile. JPG, PNG or WebP up to 15 MB. A wide photo works best for the header.</p>
+    ${err('look')}
+    <div class="look-slots">
+      ${photoSlot(user, 'avatar', 'Profile photo', 'Shown in a circle. Square photos crop best.')}
+      ${photoSlot(user, 'header', 'Header photo', 'Shown across the top of your Deliveries page.')}
+    </div>
+    <form method="post" action="/profile/bio" class="grid2 look-bio">
+      <label>Short bio <span class="muted">(up to 160 characters)</span><input name="bio" maxlength="160" value="${esc(user.bio || '')}" placeholder="Photo and film studio in Miami. Weddings, brands, music."></label>
+      <div class="row form-end"><button class="btn">Save bio</button></div>
+    </form>
+  </section>
 
   <section class="settings" id="details">
     <h2>Your details</h2>
@@ -848,15 +1181,15 @@ function deliveryHeader({ studio, brand, links, cta }) {
 </header>`;
 }
 
-function deliveryPage({ project: p, assets, studio, brand, host = '', folderOrder = [] }) {
+function deliveryPage({ project: p, assets, studio, brand, host = '', folderOrder = [], sorts = {} }) {
   const base = `/d/${p.share_token}`;
   const canDl = !!p.allow_download && assets.length > 0;
   // A video can be the cover even before it has a poster frame: the hero just plays it.
   const usable = (a) => a.thumb_name || a.kind === 'video';
   const cover = assets.find((a) => a.id === p.cover_asset_id && usable(a)) || assets.find((a) => a.thumb_name) || assets.find(usable);
   const isVisual = (a) => a.kind === 'image' || a.kind === 'video';
-  const visualGroups = byFolder(assets.filter(isVisual), [], folderOrder);
-  const otherGroups = byFolder(assets.filter((a) => !isVisual(a)), [], folderOrder);
+  const visualGroups = byFolder(assets.filter(isVisual), [], folderOrder, sorts);
+  const otherGroups = byFolder(assets.filter((a) => !isVisual(a)), [], folderOrder, sorts);
   const visual = visualGroups.flatMap((g) => g.items);
   const folderZip = (g) => (canDl && g.folder ? `<a class="dl-folder-dl" href="${base}/zip?folder=${encodeURIComponent(g.folder)}">${DL_ICON}<span>Download folder</span></a>` : '');
   // Folders start closed so the client sees them all at once and opens the ones they want with the
@@ -867,20 +1200,35 @@ function deliveryPage({ project: p, assets, studio, brand, host = '', folderOrde
   const others = otherGroups.flatMap((g) => g.items);
   const total = assets.reduce((s, a) => s + a.size, 0);
   const type = TYPES[p.type] || 'Delivery';
-  const items = visual.map((a) => ({ id: a.id, kind: a.kind, name: a.original_name, size: a.size, src: `${base}/media/${a.id}`, poster: a.thumb_name ? `${base}/thumb/${a.id}` : null, dl: p.allow_download ? `${base}/download/${a.id}` : null }));
+  // What the client is told about how long the files stay: the expiry or deletion date, whichever comes
+  // first, or (before any download) that the countdown starts with the first download.
+  const until = retention.lastDay(p);
+  const waiting = !!p.auto_delete && !p.delete_at && !!p.allow_download;
+  const keepFor = retention.daysText(retention.daysOf(p));
+  const availFact = until ? `Until ${fmtDate(until.at)}` : waiting ? `${keepFor} after download` : 'No expiry';
+  const endNote = until && until.deleting
+    ? `These files will be removed on ${fmtDate(until.at)}. Save what you need before then.`
+    : until ? `Available until ${fmtDate(until.at)}. Save what you need before then.${waiting ? ` Files are removed ${keepFor} after your first download.` : ''}`
+    : waiting ? `Files are removed ${keepFor} after your first download, so save everything you need.`
+    : 'This link stays live until your creator turns it off.';
+  const items = visual.map((a) => ({ id: a.id, kind: a.kind, name: a.original_name, mime: a.mime, size: a.size, src: `${base}/${a.kind === 'image' ? 'view' : 'media'}/${a.id}`, poster: a.thumb_name ? `${base}/thumb/${a.id}` : null, dl: p.allow_download ? `${base}/download/${a.id}` : null }));
   const ext = (n) => esc((n.split('.').pop() || 'file').slice(0, 4).toUpperCase());
+  // Each tile's real shape (width / height of its thumbnail), so vertical photos and films show whole.
+  // Extreme panoramas or slivers are kept within reason; the viewer still shows them in full.
+  const tileShape = (a) => { const r = thumbRatio(a.thumb_name); return r ? ` data-ar="${Math.min(3, Math.max(0.4, r))}"` : ''; };
   const links = [...(visual.length ? [{ href: '#work', label: 'Gallery' }] : []), ...(others.length ? [{ href: '#files', label: 'Files' }] : [])];
   const message = p.message || `Your ${type.toLowerCase()} is ready. <span>Everything here is full quality, exactly as it left the studio.</span>`;
   const noteHtml = p.message ? esc(p.message).replace(/\n/g, '<br>') : message;
   const longNote = (p.message || '').length > 150;
   const filters = photos && films ? `<div class="dl-filter" role="group" aria-label="Show">
       <button type="button" class="on" data-f="all" aria-pressed="true">All <em>${visual.length}</em></button><button type="button" data-f="image" aria-pressed="false">Photos <em>${photos}</em></button><button type="button" data-f="video" aria-pressed="false">Films <em>${films}</em></button><span class="dl-filter-dot" aria-hidden="true"></span></div>` : '';
-  return layout({ title: p.title, bodyClass: 'delivery', scripts: ['/static/gallery.js'],
+  return layout({ title: p.title, bodyClass: 'delivery', scripts: ['/static/gallery.js', '/static/photos.js'],
     header: deliveryHeader({ studio, brand, links, cta: canDl ? { href: `${base}/zip`, label: `Download all` } : null }), body: `
 <section class="fs-hero dl-hero" id="top" data-header-theme="light">
+  ${cover && cover.thumb_name ? `<div class="fs-backdrop" style="background-image:url('${base}/thumb/${cover.id}')" aria-hidden="true"></div>` : ''}
   ${cover ? (cover.kind === 'video'
     ? `<video class="fs-media" src="${base}/media/${cover.id}"${cover.thumb_name ? ` poster="${base}/thumb/${cover.id}"` : ''} autoplay muted loop playsinline preload="metadata"></video>`
-    : `<img class="fs-media" src="${base}/media/${cover.id}" alt="">`) : ''}
+    : `<img class="fs-media" src="${base}/view/${cover.id}" alt="">`) : ''}
   <h1 class="fs-title">${esc(p.title)}${p.client_name ? `<br><span>for ${esc(p.client_name)}.</span>` : ''}</h1>
   <div class="fs-aside">
     <p class="fs-mono">${esc(type)} · ${assets.length} file${assets.length === 1 ? '' : 's'} · ${fmtSize(total)}<br>Delivered by ${esc(studio)}</p>
@@ -896,7 +1244,7 @@ function deliveryPage({ project: p, assets, studio, brand, host = '', folderOrde
       <div><dt>Files</dt><dd>${assets.length}</dd></div>
       <div><dt>Total size</dt><dd>${fmtSize(total)}</dd></div>
       <div><dt>Quality</dt><dd>Original</dd></div>
-      <div><dt>Available</dt><dd>${p.expires_at ? `Until ${fmtDate(p.expires_at)}` : 'No expiry'}</dd></div>
+      <div><dt>Available</dt><dd>${availFact}</dd></div>
     </dl>
   </div>
 </section>
@@ -912,7 +1260,7 @@ ${visual.length ? `<section class="lp lp-light dl-gallery" id="work" data-header
         ${filters}
       </div>
       ${(() => { let i = 0; return visualGroups.map((g) => `<div class="dl-group${g.folder ? ' collapsed' : ''}" data-folder="${esc(g.folder)}">${folderHead(g, 'div')}<div class="dl-grid">${g.items.map((a) => `
-        <figure class="dl-tile ${a.kind}" data-index="${i++}" data-id="${a.id}" data-kind="${a.kind}" data-size="${a.size}" tabindex="0" aria-label="Open ${esc(a.original_name)}">
+        <figure class="dl-tile ${a.kind}" data-index="${i++}"${tileShape(a)} data-id="${a.id}" data-kind="${a.kind}" data-size="${a.size}" tabindex="0" aria-label="Open ${esc(a.original_name)}">
           ${a.thumb_name ? `<img loading="lazy" src="${base}/thumb/${a.id}" alt="">` : `<div class="dl-noimg">${ext(a.original_name)}</div>`}
           ${a.kind === 'video' ? '<span class="dl-play" aria-hidden="true"></span>' : ''}
           ${canDl ? `<button type="button" class="dl-check" aria-pressed="false" aria-label="Select ${esc(a.original_name)}"></button>` : ''}
@@ -941,7 +1289,7 @@ ${others.length ? `<section class="lp lp-light dl-files" id="files" data-header-
     <p class="lp-label">(That's everything)</p>
     <h2 class="end-title">${esc(p.title)}<br><span>delivered by ${esc(studio)}.</span></h2>
     ${canDl ? `<a class="fs-cta" href="${base}/zip">Download all · ${fmtSize(total)}</a>` : ''}
-    <p class="end-sub">${p.expires_at ? `Available until ${fmtDate(p.expires_at)}. Save what you need before then.` : 'This link stays live until your creator turns it off.'}</p>
+    <p class="end-sub">${endNote}</p>
   </div>
   <div class="end-foot"><span class="fs-mono">© ${esc(studio)}</span><a class="dl-made" href="/" aria-label="Made with ContentFlows">Made with <span class="foot-logo">${LOGO}</span></a></div>
 </footer>
@@ -965,4 +1313,4 @@ ${canDl ? `<div class="dl-selbar" id="dl-selbar" aria-live="polite">
 <script>window.CF_ITEMS = ${JSON.stringify(items).replace(/</g, '\\u003c')};</script>` });
 }
 
-module.exports = { profilePage, byFolder, landing, authForm, dashboard, projectPage, connectPage, unlockPage, deliveryPage, messagePage, pricingPage, fmtSize, fmtDate, TYPES };
+module.exports = { profilePage, byFolder, SORTS, landing, authForm, dashboard, projectPage, connectPage, unlockPage, deliveryPage, messagePage, pricingPage, fmtSize, fmtDate, TYPES };

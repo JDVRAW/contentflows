@@ -8,14 +8,26 @@ const dns = require('dns');
 const fs = require('fs');
 const net = require('net');
 const path = require('path');
+const { PassThrough } = require('stream');
 
-const blocked = new net.BlockList();
+// Two lists, one per family. Node's BlockList matches an IPv4 address against IPv4-mapped IPv6
+// rules (::ffff:0:0/96), so mixing them in one list made every IPv4 address look private.
+const blocked4 = new net.BlockList();
 for (const [a, bits] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16],
   ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15],
-  ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]]) blocked.addSubnet(a, bits, 'ipv4');
-for (const [a, bits] of [['::', 128], ['::1', 128], ['::ffff:0:0', 96], ['64:ff9b::', 96], ['100::', 64], ['2001:db8::', 32],
-  ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]]) blocked.addSubnet(a, bits, 'ipv6');
-const isPublic = (address, family) => !blocked.check(address, family === 6 || family === 'IPv6' ? 'ipv6' : 'ipv4');
+  ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]]) blocked4.addSubnet(a, bits, 'ipv4');
+const blocked6 = new net.BlockList();
+for (const [a, bits] of [['::', 128], ['::1', 128], ['64:ff9b::', 96], ['100::', 64], ['2001:db8::', 32],
+  ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]]) blocked6.addSubnet(a, bits, 'ipv6');
+function isPublic(address, family) {
+  const v6 = family === 6 || family === 'IPv6' || net.isIPv6(address);
+  if (!v6) return !blocked4.check(address, 'ipv4');
+  // An IPv4 address written as IPv6 (::ffff:10.0.0.1) is judged as the IPv4 address it carries.
+  const mapped = String(address).match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (mapped) return !blocked4.check(mapped[1], 'ipv4');
+  if (/^::ffff:/i.test(address)) return false; // mapped, but in hex form: refuse rather than guess
+  return !blocked6.check(address, 'ipv6');
+}
 
 function lookup(hostname, options, cb) {
   dns.lookup(hostname, { ...options, all: true }, (err, list) => {
@@ -47,7 +59,13 @@ function nameFrom(res, url) {
 
 // Resolves to { size, name, type }. maxBytes(contentLength) returns the most bytes this file may
 // have; going over it stops the download with err.code 'ETOOBIG'.
-function download(raw, dest, { maxBytes, timeoutMs = 10 * 60 * 1000, redirects = 5 } = {}) {
+// dest is a file path, or a function (stream, { declared, max, type, name }) returning a promise
+// that reads the stream to its end (to send it straight on to object storage without touching this
+// server's disk). If the download fails partway, the stream errors so the function can clean up.
+// timeoutMs stops a download that sends nothing for that long; totalMs caps the whole download.
+// headers: extra request headers (such as a Vault access key). They are only sent to the link's own
+// site: a redirect to another site drops them.
+function download(raw, dest, { maxBytes, timeoutMs = 2 * 60 * 1000, totalMs = 4 * 3600 * 1000, redirects = 5, headers = {} } = {}) {
   let url;
   try { url = new URL(directLink(raw)); } catch (e) { return Promise.reject(Object.assign(new Error('That is not a valid link.'), { code: 'EBADURL' })); }
   if (!['http:', 'https:'].includes(url.protocol))
@@ -60,11 +78,12 @@ function download(raw, dest, { maxBytes, timeoutMs = 10 * 60 * 1000, redirects =
     return Promise.reject(Object.assign(new Error('Links with a username or password in them are not supported.'), { code: 'EBADURL' }));
   return new Promise((resolve, reject) => {
     const lib = url.protocol === 'https:' ? https : http;
-    const req = lib.get(url, { lookup, timeout: 30000, headers: { 'User-Agent': 'ContentFlows/1.0', Accept: '*/*' } }, (res) => {
+    const req = lib.get(url, { lookup, timeout: 30000, headers: { 'User-Agent': 'ContentFlows/1.0', Accept: '*/*', ...headers } }, (res) => {
       if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
         res.resume();
         if (!redirects) return reject(Object.assign(new Error('That link redirects too many times.'), { code: 'EREDIRECT' }));
-        return resolve(download(new URL(res.headers.location, url).toString(), dest, { maxBytes, timeoutMs, redirects: redirects - 1 }));
+        const next = new URL(res.headers.location, url);
+        return resolve(download(next.toString(), dest, { maxBytes, timeoutMs, totalMs, redirects: redirects - 1, headers: next.origin === url.origin ? headers : {} }));
       }
       if (res.statusCode !== 200) {
         res.resume();
@@ -81,24 +100,75 @@ function download(raw, dest, { maxBytes, timeoutMs = 10 * 60 * 1000, redirects =
         res.resume();
         return reject(Object.assign(new Error('The file is too big.'), { code: 'ETOOBIG', size: declared }));
       }
-      let size = 0, failed = null;
-      const out = fs.createWriteStream(dest, { flags: 'wx' });
-      let timer;
-      const fail = (e) => { if (failed) return; failed = e; clearTimeout(timer); res.destroy(); out.destroy(); fs.rm(dest, { force: true }, () => reject(e)); };
-      timer = setTimeout(() => fail(Object.assign(new Error('The download took too long.'), { code: 'ETIMEDOUT' })), timeoutMs);
+      let size = 0, failed = null, idle, total;
+      const name = nameFrom(res, url.toString());
+      const toSink = typeof dest === 'function';
+      const out = toSink ? new PassThrough() : fs.createWriteStream(dest, { flags: 'wx' });
+      const stop = () => { clearTimeout(idle); clearTimeout(total); };
+      const fail = (e) => {
+        if (failed) return;
+        failed = e; stop(); res.destroy(); out.destroy(toSink ? e : undefined);
+        if (toSink) reject(e); else fs.rm(dest, { force: true }, () => reject(e));
+      };
+      const tooSlow = () => fail(Object.assign(new Error('The download stalled.'), { code: 'ETIMEDOUT' }));
+      idle = setTimeout(tooSlow, timeoutMs);
+      total = setTimeout(() => fail(Object.assign(new Error('The download took too long.'), { code: 'ETIMEDOUT' })), totalMs);
       res.on('data', (chunk) => {
         size += chunk.length;
+        idle.refresh();
         if (size > max) fail(Object.assign(new Error('The file is too big.'), { code: 'ETOOBIG', size }));
       });
       res.on('error', fail);
-      out.on('error', fail);
-      out.on('finish', () => { clearTimeout(timer); if (!failed) resolve({ size, type: type || null, name: nameFrom(res, url.toString()) }); });
+      out.on('error', (e) => { if (!toSink) fail(e); });
       res.on('aborted', () => fail(new Error('The download was cut off.')));
       res.pipe(out);
+      const done = () => { stop(); if (!failed) resolve({ size, type: type || null, name }); };
+      if (!toSink) return out.on('finish', done);
+      const declaredSize = Number.isFinite(declared) ? declared : 0;
+      // The response can end early without an error when the connection drops.
+      Promise.resolve().then(() => dest(out, { declared: declaredSize, max, type: type || null, name }))
+        .then(() => {
+          if (failed) return;
+          if (declaredSize && size !== declaredSize) return fail(new Error('The download was cut off.'));
+          done();
+        }, fail);
     });
     req.on('timeout', () => req.destroy(Object.assign(new Error('The link did not answer in time.'), { code: 'ETIMEDOUT' })));
     req.on('error', reject);
   });
 }
 
-module.exports = { download, isPublic };
+// Opens a public http(s) address with the same safety checks as download() and resolves to the
+// response (status, headers, body stream). No redirects are followed. For small API calls and
+// thumbnails; the caller reads or pipes the body.
+function open(raw, { headers = {}, timeoutMs = 20000 } = {}) {
+  let url;
+  try { url = new URL(raw); } catch (e) { return Promise.reject(Object.assign(new Error('That is not a valid address.'), { code: 'EBADURL' })); }
+  if (!['http:', 'https:'].includes(url.protocol)) return Promise.reject(Object.assign(new Error('Only http and https addresses work.'), { code: 'EBADURL' }));
+  const host = url.hostname.replace(/^\[|\]$/g, '');
+  if (net.isIP(host) && !isPublic(host, net.isIP(host)))
+    return Promise.reject(Object.assign(new Error('That address is private.'), { code: 'EPRIVATE' }));
+  return new Promise((resolve, reject) => {
+    const lib = url.protocol === 'https:' ? https : http;
+    const req = lib.get(url, { lookup, timeout: timeoutMs, headers: { 'User-Agent': 'ContentFlows/1.0', Accept: '*/*', ...headers } }, resolve);
+    req.on('timeout', () => req.destroy(Object.assign(new Error('The address did not answer in time.'), { code: 'ETIMEDOUT' })));
+    req.on('error', reject);
+  });
+}
+
+// GET a JSON API with open(). Resolves to { status, body } (body null when it isn't JSON).
+async function getJson(raw, opts = {}) {
+  const res = await open(raw, { ...opts, headers: { Accept: 'application/json', ...(opts.headers || {}) } });
+  const chunks = [];
+  let size = 0;
+  for await (const c of res) {
+    size += c.length;
+    if (size > 5 * 1024 * 1024) { res.destroy(); throw Object.assign(new Error('The answer was too big.'), { code: 'ETOOBIG' }); }
+    chunks.push(c);
+  }
+  let body = null;
+  try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch (e) {}
+  return { status: res.statusCode, body };
+}
+
+module.exports = { download, open, getJson, isPublic };

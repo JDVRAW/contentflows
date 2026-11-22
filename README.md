@@ -13,8 +13,10 @@ A delivery platform for creatives. Upload final photoshoots, music videos, comme
 - **Folder names and order**: "Rename" changes a folder's name as often as needed (its files, subfolders, link and settings stay with it), and the ↑ ↓ arrows set the order folders appear in, which is also the order the client sees (for example Photos, then Videos, then BTS)
 - **Folder links**: "Share this folder" on a folder makes its own link. Whoever opens it sees and downloads only that folder (and the folders inside it), never the rest of the delivery: the page, thumbnails, files and zips all refuse anything outside it. It follows the delivery's password, expiry and download settings, and "Turn off link" stops it working
 - **Automatic thumbnails and video poster frames** via ffmpeg
-- **Client delivery page**: cinematic cover, a large-type note from the studio with files, size and expiry at a glance, a gallery laid out like the "One link" scene on the home page (a sand board with a copyable link pill, a Photos/Films switch, and an even grid of rounded tiles where the first tile widens so every row is full), hover download and film previews, pick several files and download just those as one zip, a full-screen viewer with keyboard and swipe navigation, a files list with built-in audio players, and a closing Download all
+- **Client delivery page**: cinematic cover, a large-type note from the studio with files, size and expiry at a glance, a gallery laid out like the "One link" scene on the home page (a sand board with a copyable link pill, a Photos/Films switch, and a masonry grid of rounded tiles that keep each photo's and film's real shape, so vertical shots show whole instead of being cropped to a wide tile), hover download and film previews, pick several files and download just those as one zip, a full-screen viewer with keyboard and swipe navigation, a files list with built-in audio players, and a closing Download all
 - **Downloads**: single files, a picked selection (`/d/:token/zip?ids=1,2,3`), or "Download all" as a zip
+- **Save to Photos on iPhone and iPad**: a plain download there lands in the Files app, so on those devices the download buttons for photos and films (the viewer's Download, Download selected, a gallery folder's Download folder, and Download all) open a small sheet instead. It loads the originals in the page from the usual download address (so they still count as downloads and start the auto-delete countdown), then "Save to Photos" opens the share sheet, where "Save Image" / "Save Video" puts them in the photo library at full quality. Two taps, because iOS only opens the share sheet straight after a tap. Big sets go in batches of up to 400 MB or 20 files. Films over 750 MB, formats the share sheet won't take, and documents keep the ordinary download, and "Save to Files instead" is always there. Needs `GET` in the R2 bucket's CORS policy (it is in the policy below). Android is left as it was: its downloads already show in Google Photos and the gallery app under Download. Code: `public/photos.js`
+- **Auto-delete after download (opt-in)**: when creating a delivery or in its Settings, the creator can tick "Delete this delivery and its files after the client downloads" and choose the countdown in days (1 to 365, suggested 7, `AUTO_DELETE_DAYS`). The countdown starts the first time the client downloads anything (a file, a selection, a folder or Download all); the creator's own downloads and previews don't count. Changing the length moves a running countdown, and unticking it (or "Keep this delivery") stops it. The client sees the date on the delivery page ("Available until…") and in the delivery email; the creator sees "Deletes …" on the dashboard card and a notice on the delivery. Due deliveries stop opening for clients right away and are removed, bytes in R2 or on disk included, by an hourly sweep. Off by default
 - **Link controls**: optional password, expiry date, downloads on/off, regenerate link to revoke the old one
 - **Security**: delivery links carry a random 128-bit code; passwords are stored as bcrypt hashes; after 10 wrong passwords from one address, or 30 in total, a delivery or account refuses more tries for 15 minutes. Files in R2 are served through signed links that expire after 6 hours. Only photos, video and audio open in the browser; any other file downloads, and files on the server's disk are sent with a `sandbox` policy, so an uploaded HTML or SVG file can't run as a page
 - **Email the link**: under the delivery link, "Email the link to your client" sends the client a short branded email (the studio's logo on Pro and Studio when it's a PNG, JPG or WebP, otherwise the studio name), with the delivery's title, the personal message, file count and size, expiry, and a "View your files" button. It comes from "Studio via ContentFlows" and replies go to the creator's own email. Up to 5 addresses at a time, each sent separately; the password is never included. Each creator can email 50 addresses a day (`MAIL_DAILY_LIMIT`), and only after confirming their own email through the link sent at signup (accounts made before this check count as confirmed). Needs `RESEND_API_KEY` and `MAIL_FROM` (see Email below); without them the box says email isn't set up
@@ -46,14 +48,40 @@ ContentFlows is also a remote [MCP](https://modelcontextprotocol.io) server, so 
 
 - **Keys**: on `/connect` (Connect AI in the header) a creator makes a named API key. It's shown once; only its SHA-256 hash is stored. Keys can be revoked there, and the page shows when each was last used.
 - **Address**: `POST /mcp/<key>` (for apps whose connector screen only takes a URL, like Claude's custom connectors), or `POST /mcp` with `Authorization: Bearer <key>`. Streamable HTTP, stateless, JSON responses. Keys in addresses are masked in error logs.
-- **Tools**: `list_deliveries`, `get_delivery`, `create_delivery`, `update_delivery` (title, client, message, password, expiry, downloads), `add_file_from_url`, `set_cover`, `remove_file`, `new_share_link`, `delete_delivery`, `get_storage`. Every tool only sees the key owner's deliveries. The tools that delete or replace something (`remove_file`, `new_share_link`, `delete_delivery`) are marked destructive, so assistants ask before running them.
+- **Tools**: `list_deliveries`, `get_delivery`, `create_delivery`, `update_delivery` (title, client, message, password, expiry, downloads), `add_file_from_url`, `search_google_drive`, `add_files_from_google_drive`, `browse_vault`, `add_files_from_vault`, `get_import_status`, `create_upload_links`, `set_cover`, `remove_file`, `new_share_link`, `delete_delivery`, `get_storage`. Every tool only sees the key owner's deliveries. The tools that delete or replace something (`remove_file`, `new_share_link`, `delete_delivery`) are marked destructive, so assistants ask before running them.
 - **Files by link**: `add_file_from_url` downloads a public http(s) link (Dropbox and Google Drive share links are turned into their download links), checks the per-file limit and the creator's plan while it downloads, makes a thumbnail, and stores the file on disk or in the bucket like any upload. Only public internet addresses are allowed: links to this server, private networks or cloud metadata addresses are refused, including after redirects. Very large videos are better uploaded in the app, since assistants stop waiting after a while.
+
+- **Files from Google Drive**: once the creator connects Google Drive (below), `add_files_from_google_drive` copies Drive files into a delivery without them being shared publicly. It takes Drive links or ids, of files or of a folder (the files directly inside it are added; subfolders and Google Docs/Sheets/Slides are listed as skipped). `search_google_drive` finds files by name or lists a folder. `add_file_from_url` also opens Drive links through the connected Drive. Drive and Vault copies run in the background, one file at a time per delivery, so a big video doesn't hold the assistant's request open; `get_import_status` reports each file as waiting, copying, done or failed.
+
+- **Files on the creator's computer**: `create_upload_links` makes one private link per delivery folder (`/up/<token>`, 24 hours, any number of files, saved in the `upload_links` table so a restart or redeploy doesn't void it, nor a file partway into the bucket). An assistant that can run commands on the creator's computer (Claude Desktop with folder access, Claude Code) runs the returned `folder_script` on a local folder: it sends every non-hidden file with `curl -T "<file>" --url-query "name=<file name>" --url-query "dir=<subfolder>" "<link>"`, so subfolders become folders in the delivery, and prints `ok` or `FAILED` per file. The plan and per-file limits are checked from `Content-Length` before reading. Files sent without a type get one from their extension so videos play in the browser. Cloudflare in front of the site refuses request bodies over 100 MB, so the script sends bigger files in parts (`split -b 90m`, then `&part=N&parts=TOTAL` in order); a failed piece can be sent again, and a repeated piece is answered as already received (every answer waits until the request body has been read, so curl doesn't exit with error 55). With object storage set up, each piece goes straight into a multipart upload in the bucket and never touches the server's disk; without it, pieces are appended to one file on disk.
+- **Photo views**: the client gallery's cover and big viewer show a 2560 px JPEG of each photo (`/d/<token>/view/<id>`), not the original, so deliveries of 50 MB PNGs or TIFFs open quickly. It is made after upload (kept in the bucket at `views/<id>.jpg`, or next to the thumbnails without a bucket), on first look for older photos, and by a backfill after each start. Downloads still give the original.
 
 Try it with Claude Code:
 
 ```bash
 claude mcp add --transport http contentflows https://your-site/mcp/cf_your-key
 ```
+
+## Google Drive
+
+Creators can let their AI assistant copy files from their own Google Drive into deliveries, so client files don't have to be made public first.
+
+1. In ContentFlows, open **Connect AI → Google Drive** and choose **Connect Google Drive**. Google asks them to allow read-only access.
+2. Ask the assistant, for example "Add the videos in my Drive folder Finals to Ana's delivery, in a folder called Reels."
+
+Only the refresh token and the Google account's email are kept (`users.gdrive_refresh`, `users.gdrive_email`); **Disconnect** revokes the token at Google. Files are downloaded server to server from the Drive API (`src/gdrive.js`) and stored like any upload.
+
+Setup, once per server: in Google Cloud, enable the **Google Drive API**, make an OAuth consent screen with the scopes `openid`, `email` and `drive.readonly`, and a **Web application** OAuth client whose authorised redirect URI is `<your site>/connect/google/callback`. Put its id and secret in `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Without them the Google Drive section is hidden. `drive.readonly` is a restricted scope: until Google verifies the app, it works for up to 100 test users you add on the consent screen, who see an "unverified app" warning.
+
+## Your Vault (storage platform)
+
+Creators who keep their footage in their own Vault (the separate storage platform) can pick files from it inside any delivery:
+
+1. In the Vault, open **Security → Connected apps** and make a key. Keys are read-only: they can list folders and download files, nothing else.
+2. In ContentFlows, open **Connect AI → Your Vault** and paste the Vault's address and the key. ContentFlows checks it before saving.
+3. On a delivery, choose **Add from Vault**, tick files (or a whole folder's worth) and pick which delivery folder they go in.
+
+The server copies each file from the Vault itself (`src/vault.js`, `src/import-file.js`), one at a time per delivery, and the page shows progress. Files arrive at full quality and count toward the creator's plan. Copies still running are lost if the server restarts; just add them again.
 
 ## Run locally
 
@@ -79,6 +107,7 @@ npm start            # http://localhost:3000
 | `S3_BUCKET` | | Bucket name |
 | `S3_ACCESS_KEY_ID` | | Access key of an API token with object read and write on the bucket |
 | `S3_SECRET_ACCESS_KEY` | | Its secret |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | | Google OAuth client for Connect Google Drive (see Google Drive above). Without them the feature is off |
 | `RESEND_API_KEY` | | [Resend](https://resend.com) API key (Sending access is enough). Turns on "Email the link" |
 | `MAIL_FROM` | | Address the emails come from, on a domain verified in Resend, e.g. `deliveries@yourdomain.com` |
 | `MAIL_DAILY_LIMIT` | `50` | Addresses each creator can email per 24 hours |
@@ -89,6 +118,7 @@ npm start            # http://localhost:3000
 | `S3_FORCE_PATH_STYLE` | | Set to `1` for services that need path-style URLs (MinIO, local test servers) |
 | `STRIPE_SECRET_KEY` | | Stripe secret key (`sk_live_…` or `sk_test_…`). Turns on paid plans |
 | `STRIPE_WEBHOOK_SECRET` | | Signing secret of the webhook endpoint (`whsec_…`) |
+| `AUTO_DELETE_DAYS` | `7` | Countdown suggested when a creator turns on auto-delete |
 | `OWNER_EMAILS` | | Comma-separated login emails with no storage limit (the people running the site). Only counts once that email is confirmed |
 
 When all four `S3_*` values are set, new uploads go to the bucket and clients stream and download them through signed links that last 6 hours. Without them, files are kept in `DATA_DIR/uploads`. Files uploaded before the switch keep working from the disk.

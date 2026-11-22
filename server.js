@@ -8,13 +8,17 @@ const multer = require('multer');
 const { ZipArchive } = require('archiver');
 const { pipeline } = require('stream');
 const { db, DATA_DIR } = require('./src/db');
-const { kindOf, makeThumb } = require('./src/media');
+const { kindOf, makeThumb, makeView, squashPhoto } = require('./src/media');
 const storage = require('./src/storage');
 const billing = require('./src/billing');
 const { PLANS, PAID, INTERVALS, planOf, canBrand, brandOf } = require('./src/plans');
 const V = require('./src/views');
 const { mcpRouter, newKey, hashKey } = require('./src/mcp');
 const mail = require('./src/mail');
+const vault = require('./src/vault');
+const gdrive = require('./src/gdrive');
+const { makeImporter } = require('./src/import-file');
+const retention = require('./src/retention');
 
 const PORT = process.env.PORT || 3000;
 // Cookie signing key: SESSION_SECRET if set, otherwise one generated on first start and kept with the data.
@@ -310,16 +314,24 @@ app.get('/dashboard', requireUser, (req, res) => {
       ) AS cover_id
     FROM projects p WHERE p.user_id = ? ORDER BY p.created_at DESC, p.id DESC`).all(req.user.id)
     .map((p) => ({ ...p, cover_thumb: !!p.cover_id }));
-  res.send(V.dashboard({ user: req.user, projects, usage: usage(req.user) }));
+  res.send(V.dashboard({ user: req.user, projects, usage: usage(req.user),
+    vaultPromo: !vault.connected(req.user) && !req.user.vault_promo_hidden }));
+});
+
+// Closes the "New: Add from Vault" card on the dashboard for good.
+app.post('/vault-promo/hide', requireUser, (req, res) => {
+  db.prepare('UPDATE users SET vault_promo_hidden = 1 WHERE id = ?').run(req.user.id);
+  if (req.get('accept') === 'application/json') return res.json({ ok: true });
+  res.redirect('/dashboard');
 });
 
 const TYPES = Object.keys(V.TYPES);
 app.post('/projects', requireUser, (req, res) => {
-  const { title = '', type, client_name, client_email } = req.body;
+  const { title = '', type, client_name, client_email, auto_delete, auto_delete_days } = req.body;
   if (!title.trim()) return res.redirect('/dashboard');
-  const r = db.prepare(`INSERT INTO projects (user_id, title, type, client_name, client_email, share_token)
-    VALUES (?, ?, ?, ?, ?, ?)`).run(req.user.id, title.trim(), TYPES.includes(type) ? type : 'project',
-    client_name?.trim() || null, client_email?.trim() || null, token(16));
+  const r = db.prepare(`INSERT INTO projects (user_id, title, type, client_name, client_email, share_token, auto_delete, auto_delete_days)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(req.user.id, title.trim(), TYPES.includes(type) ? type : 'project',
+    client_name?.trim() || null, client_email?.trim() || null, token(16), auto_delete ? 1 : 0, retention.cleanDays(auto_delete_days));
   res.redirect(`/projects/${r.lastInsertRowid}`);
 });
 
@@ -338,15 +350,17 @@ app.get('/projects/:id', requireUser, ownProject, (req, res) => {
   const stats = db.prepare(`SELECT
       SUM(type = 'view') AS views, SUM(type IN ('download', 'zip')) AS downloads, MAX(CASE WHEN type != 'email' THEN created_at END) AS last
     FROM events WHERE project_id = ?`).get(p.id);
-  const rows = db.prepare('SELECT path, collapsed, share_token, position FROM folders WHERE project_id = ? ORDER BY id').all(p.id);
+  const rows = db.prepare('SELECT path, collapsed, share_token, position, sort FROM folders WHERE project_id = ? ORDER BY id').all(p.id);
   const folders = rows.map((r) => r.path).filter(Boolean);
   const collapsed = rows.filter((r) => r.collapsed).map((r) => r.path);
   const folderOrder = rows.filter((r) => r.path && r.position !== null).sort((a, b) => a.position - b.position).map((r) => r.path);
   const folderLinks = Object.fromEntries(rows.filter((r) => r.share_token && r.path).map((r) => [r.path, r.share_token]));
-  res.send(V.projectPage({ user: req.user, project: p, assets, folders, collapsed, folderLinks, folderOrder, saved: req.query.saved, notice: req.query.notice,
+  const sorts = Object.fromEntries(rows.filter((r) => r.sort).map((r) => [r.path, r.sort]));
+  res.send(V.projectPage({ user: req.user, project: p, assets, folders, collapsed, folderLinks, folderOrder, sorts, saved: req.query.saved, notice: req.query.notice,
     mail: { enabled: mail.enabled, partlySet: mail.partlySet, verified: !!req.user.email_verified, email: req.user.email, sent: !!req.query.emailed, error: req.query.mail_error, maxTo: MAIL_MAX_TO },
     stats: { views: stats.views || 0, downloads: stats.downloads || 0, last: stats.last },
-    origin: originOf(req), direct: storage.enabled, storageMissing: storage.partlySet, usage: usage(req.user) }));
+    origin: originOf(req), direct: storage.enabled, storageMissing: storage.partlySet, usage: usage(req.user),
+    vault: !!vault.connected(req.user) }));
 });
 
 app.post('/projects/:id/settings', requireUser, ownProject, (req, res) => {
@@ -354,11 +368,23 @@ app.post('/projects/:id/settings', requireUser, ownProject, (req, res) => {
   let pw = req.project.password_hash;
   if (b.remove_password) pw = null;
   else if (b.password) pw = bcrypt.hashSync(b.password, 10);
+  // Turning auto-delete off stops a countdown that already started; turning it back on waits for the next
+  // download. A new length moves a running countdown, which still counts from the first download.
+  const days = retention.cleanDays(b.auto_delete_days);
+  const p0 = req.project;
+  const deleteAt = !b.auto_delete || !p0.auto_delete || !p0.delete_at ? null : retention.shiftDeleteAt(p0.delete_at, retention.daysOf(p0), days);
   db.prepare(`UPDATE projects SET title = ?, type = ?, client_name = ?, client_email = ?, message = ?,
-    password_hash = ?, allow_download = ?, expires_at = ? WHERE id = ?`).run(
+    password_hash = ?, allow_download = ?, expires_at = ?, auto_delete = ?, auto_delete_days = ?, delete_at = ? WHERE id = ?`).run(
     (b.title || '').trim() || req.project.title, TYPES.includes(b.type) ? b.type : req.project.type,
     b.client_name?.trim() || null, b.client_email?.trim() || null, b.message?.trim() || null,
-    pw, b.allow_download ? 1 : 0, /^\d{4}-\d{2}-\d{2}$/.test(b.expires_at || '') ? b.expires_at : null, req.project.id);
+    pw, b.allow_download ? 1 : 0, /^\d{4}-\d{2}-\d{2}$/.test(b.expires_at || '') ? b.expires_at : null,
+    b.auto_delete ? 1 : 0, days, deleteAt, req.project.id);
+  res.redirect(`/projects/${req.project.id}?saved=1`);
+});
+
+// "Keep this delivery": stops the countdown and turns auto-delete off for this delivery (it can be turned back on in Settings).
+app.post('/projects/:id/keep', requireUser, ownProject, (req, res) => {
+  db.prepare('UPDATE projects SET auto_delete = 0, delete_at = NULL WHERE id = ?').run(req.project.id);
   res.redirect(`/projects/${req.project.id}?saved=1`);
 });
 
@@ -411,6 +437,7 @@ function removeAssetFiles(a) {
   if (a.storage === 's3') { if (storage.enabled) storage.remove(a.stored_name); }
   else fs.rm(path.join(UPLOADS, String(a.project_id), a.stored_name), { force: true }, () => {});
   if (a.thumb_name) fs.rm(path.join(THUMBS, a.thumb_name), { force: true }, () => {});
+  if (a.view_name) { if (a.storage === 's3') { if (storage.enabled) storage.remove(a.view_name); } else fs.rm(path.join(THUMBS, a.view_name), { force: true }, () => {}); }
 }
 
 app.post('/projects/:id/assets/:aid/delete', requireUser, ownProject, (req, res) => {
@@ -489,6 +516,74 @@ app.post('/projects/:id/folders/order', requireUser, ownProject, (req, res) => {
   back(req, res);
 });
 
+// How each folder's files are ordered, as { path: sort } ('' = loose files). Through a folder link the
+// paths are read from inside that folder, like the files themselves ("BTS" becomes '', "BTS/Raw" "Raw").
+function sortsOf(projectId, scope = null) {
+  const out = {};
+  for (const r of db.prepare('SELECT path, sort FROM folders WHERE project_id = ? AND sort IS NOT NULL').all(projectId)) {
+    if (!scope) out[r.path] = r.sort;
+    else if (r.path === scope) out[''] = r.sort;
+    else if (r.path.startsWith(scope + '/')) out[r.path.slice(scope.length + 1)] = r.sort;
+  }
+  // Inside a folder link the folder's own files are the loose ones, so they keep the folder's default (name).
+  if (scope && !out['']) out[''] = 'name';
+  return out;
+}
+// The files of one folder ('' = loose files) in the order they show now.
+function folderFiles(projectId, folder) {
+  const assets = db.prepare('SELECT * FROM assets WHERE project_id = ? AND COALESCE(folder, \'\') = ?').all(projectId, folder);
+  return V.byFolder(assets, [], [], sortsOf(projectId)).find((g) => g.folder === folder)?.items || [];
+}
+// Save a folder's custom order: its files take the places they already hold in the project's list,
+// in the new order, and every file is renumbered 1, 2, 3… so no two share a place.
+function placeFiles(projectId, folder, ids) {
+  const all = db.prepare('SELECT id, folder FROM assets WHERE project_id = ? ORDER BY position, id').all(projectId);
+  const mine = new Set(all.filter((a) => (a.folder || '') === folder).map((a) => a.id));
+  const wanted = [...new Set(ids)].filter((id) => mine.has(id));
+  const rest = [...mine].filter((id) => !wanted.includes(id));
+  const queue = [...wanted, ...rest.filter((id) => !wanted.includes(id))];
+  const next = all.map((a) => (mine.has(a.id) ? queue.shift() : a.id));
+  const set = db.prepare('UPDATE assets SET position = ? WHERE id = ?');
+  db.transaction(() => next.forEach((id, i) => set.run(i + 1, id)))();
+}
+const setSort = db.prepare(`INSERT INTO folders (project_id, path, sort) VALUES (?, ?, ?)
+  ON CONFLICT (project_id, path) DO UPDATE SET sort = excluded.sort`);
+
+// Pick how a folder's files are ordered. Switching to custom starts from the order showing now,
+// so the creator drags from what they see instead of from upload order.
+app.post('/projects/:id/folders/sort', requireUser, ownProject, (req, res) => {
+  const raw = String(req.body?.folder ?? '');
+  const folder = raw ? cleanFolder(raw) : '';
+  const sort = String(req.body?.sort || '');
+  if (folder === null || !V.SORTS[sort]) return req.xhr ? res.status(400).json({ ok: false }) : back(req, res);
+  if (sort === 'custom') placeFiles(req.project.id, folder, folderFiles(req.project.id, folder).map((a) => a.id));
+  setSort.run(req.project.id, folder, sort);
+  back(req, res);
+});
+
+// Save a folder's custom order after the creator drags files around (ids in their new order).
+app.post('/projects/:id/assets/order', requireUser, ownProject, (req, res) => {
+  const raw = String(req.body?.folder ?? '');
+  const folder = raw ? cleanFolder(raw) : '';
+  const ids = [].concat(req.body?.ids ?? []).flatMap((v) => String(v).split(',')).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  if (folder === null || !ids.length) return req.xhr ? res.status(400).json({ ok: false }) : back(req, res);
+  placeFiles(req.project.id, folder, ids);
+  setSort.run(req.project.id, folder, 'custom');
+  req.xhr ? res.json({ ok: true }) : back(req, res);
+});
+
+// Move one file a place earlier or later in a custom-ordered folder (the arrows under each file).
+app.post('/projects/:id/assets/:aid/nudge', requireUser, ownProject, (req, res) => {
+  const a = db.prepare('SELECT id, folder FROM assets WHERE id = ? AND project_id = ?').get(req.params.aid, req.project.id);
+  if (!a) return back(req, res);
+  const ids = folderFiles(req.project.id, a.folder || '').map((x) => x.id);
+  const i = ids.indexOf(a.id), j = i + (req.body?.dir === 'up' ? -1 : 1);
+  if (i < 0 || j < 0 || j >= ids.length) return back(req, res);
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  placeFiles(req.project.id, a.folder || '', ids);
+  back(req, res);
+});
+
 // Rename a folder (only its own name; it stays inside the same parent). Its files, the folders
 // inside it, its link, its place in the order and whether it's closed all carry over.
 app.post('/projects/:id/folders/rename', requireUser, ownProject, (req, res) => {
@@ -545,7 +640,9 @@ app.post('/projects/:id/assets/move', requireUser, ownProject, (req, res) => {
   if (req.body?.folder === '__new' && !target) return back(req, res, 'Give the new folder a name.');
   db.transaction(() => {
     if (target) saveFolder.run(req.project.id, target);
-    picked.forEach((a) => setFolder.run(target, a.id));
+    // Moved files land at the end of the folder they go to (in a custom order, they then sit last).
+    const end = db.prepare('UPDATE assets SET position = (SELECT COALESCE(MAX(position), 0) + 1 FROM assets WHERE project_id = ?) WHERE id = ?');
+    picked.sort((x, y) => (x.position - y.position) || (x.id - y.id)).forEach((a) => { setFolder.run(target, a.id); end.run(req.project.id, a.id); });
   })();
   back(req, res, `Moved ${plural(picked.length, 'file')} to ${target ? `“${target.split('/').join(' / ')}”` : 'no folder'}.`);
 });
@@ -562,11 +659,32 @@ app.post('/projects/:id/assets/delete', requireUser, ownProject, (req, res) => {
   back(req, res, `Deleted ${plural(picked.length, 'file')}.`);
 });
 
+function deleteDelivery(id) {
+  const files = db.prepare('SELECT * FROM assets WHERE project_id = ?').all(id);
+  // The row goes first (files, folders and events cascade), then the stored bytes.
+  db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+  files.forEach(removeAssetFiles);
+  return files;
+}
+
 app.post('/projects/:id/delete', requireUser, ownProject, (req, res) => {
-  db.prepare('SELECT * FROM assets WHERE project_id = ?').all(req.project.id).forEach(removeAssetFiles);
-  db.prepare('DELETE FROM projects WHERE id = ?').run(req.project.id);
+  deleteDelivery(req.project.id);
   res.redirect('/dashboard');
 });
+
+// Deliveries whose auto-delete date has passed go for good, files included. Runs on start and hourly;
+// until then their links already refuse clients (see loadDelivery).
+function deleteDueDeliveries() {
+  const due = db.prepare('SELECT id, title FROM projects WHERE auto_delete = 1 AND delete_at IS NOT NULL AND delete_at <= ?')
+    .all(retention.sqlTime(Date.now()));
+  for (const p of due) {
+    try {
+      const files = deleteDelivery(p.id);
+      console.log(`[auto-delete] removed delivery ${p.id} (${files.length} file${files.length === 1 ? '' : 's'}, ${(files.reduce((n, a) => n + a.size, 0) / 1024 ** 3).toFixed(2)} GB)`);
+    } catch (e) { console.error('[auto-delete]', p.id, e.message); }
+  }
+  return due.length;
+}
 
 // ---------- creator: uploads ----------
 const upload = multer({
@@ -645,10 +763,227 @@ app.post('/projects/:id/upload', requireUser, ownProject, checkSpace, upload.arr
     if (folder) setFolder.run(folder, r.lastInsertRowid);
     const thumb = await makeThumb(f.path, kind, r.lastInsertRowid);
     if (thumb) db.prepare('UPDATE assets SET thumb_name = ? WHERE id = ?').run(thumb, r.lastInsertRowid);
+    queueView(r.lastInsertRowid);
     out.push({ id: r.lastInsertRowid, name, kind, size: f.size });
   }
   res.json({ ok: true, files: out });
 });
+
+// ---------- upload links (for AI assistants on the creator's computer) ----------
+// The assistant's create_upload_links tool makes one link per delivery folder (src/mcp.js). An
+// assistant that can run commands on the creator's computer (Claude Desktop with folder access,
+// Claude Code…) sends every file of a folder on that computer to it, each with
+// `curl -T <file> "<link>?name=<file name>"` (and &dir=<subfolder> to keep subfolders), so photos and
+// videos go from the computer straight into the delivery without being shared anywhere first.
+// A link takes any number of files for 24 hours. Links live in the database (upload_links), so they
+// survive a restart; so does a file partway into the bucket (its multipart upload id and the parts
+// that arrived), and the next part picks up where it left off. Without a bucket, a half-sent file
+// on disk is removed on restart (sweepUnfinishedUploads) and starts again from part 1.
+const UPLOAD_LINK_HOURS = 24;
+const uploadLinks = new Map(); // token -> { userId, projectId, folder, until, files: Map(file key -> { partial, busy }) }
+function makeUploadLink(user, p, { folder }) {
+  const t = token(24);
+  const link = { userId: user.id, projectId: p.id, folder: folder || null, until: Date.now() + UPLOAD_LINK_HOURS * 3600e3, files: new Map() };
+  uploadLinks.set(t, link);
+  saveLink(t, link);
+  return { token: t, expires_at: new Date(Date.now() + UPLOAD_LINK_HOURS * 3600e3).toISOString() };
+}
+// Types for files sent without one (curl -T sends none), so videos and photos still play in the browser.
+const TYPE_BY_EXT = { '.mp4': 'video/mp4', '.m4v': 'video/x-m4v', '.mov': 'video/quicktime', '.webm': 'video/webm', '.mkv': 'video/x-matroska',
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif', '.heic': 'image/heic',
+  '.tif': 'image/tiff', '.tiff': 'image/tiff', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.aac': 'audio/aac',
+  '.flac': 'audio/flac', '.pdf': 'application/pdf', '.zip': 'application/zip' };
+
+// Big files go in parts: Cloudflare in front of the site refuses any request body over 100 MB, so
+// the assistant splits the file (split -b 90m) and PUTs each piece with ?part=N&parts=M, in order.
+// Pieces are appended to one file on disk; after the last one it is stored like any other upload.
+// A failed piece can be sent again; a piece that already arrived is answered as done.
+const PART_MAX = 99 * 1000 * 1000;
+const PART_HINT = 'Files over 90 MB must go in parts: split -b 90m <file> and PUT each piece in order to <link>?part=N&parts=TOTAL.';
+// A file partway in (slot.partial) is thrown away: its pieces on disk, or its upload in the bucket.
+function dropParts(slot) {
+  const st = slot && slot.partial;
+  if (!st) return;
+  if (st.uploadId) storage.abortUpload(st.key, st.uploadId); else fs.rm(st.tmp, { force: true }, () => {});
+  slot.partial = null;
+}
+const dropLink = (link) => { for (const slot of link.files.values()) dropParts(slot); link.files.clear(); };
+const saveLinkRow = db.prepare('INSERT OR REPLACE INTO upload_links (token, user_id, project_id, folder, until, files) VALUES (?, ?, ?, ?, ?, ?)');
+function saveLink(t, l) {
+  const files = [...l.files].filter(([, slot]) => slot.partial && slot.partial.uploadId).map(([k, slot]) => [k, slot.partial]);
+  saveLinkRow.run(t, l.userId, l.projectId, l.folder, l.until, JSON.stringify(files));
+}
+const forgetLink = (t) => db.prepare('DELETE FROM upload_links WHERE token = ?').run(t);
+function endLink(t, l) { dropLink(l); uploadLinks.delete(t); forgetLink(t); }
+// Links from before the last restart. Expired ones give back their half-sent bucket uploads.
+for (const r of db.prepare('SELECT * FROM upload_links').all()) {
+  let files = [];
+  try { files = JSON.parse(r.files || '[]'); } catch (e) { /* keep the link, lose the half-sent files */ }
+  const l = { userId: r.user_id, projectId: r.project_id, folder: r.folder, until: r.until,
+    files: new Map(files.filter(([, st]) => st && st.uploadId && storage.enabled).map(([k, partial]) => [k, { partial, busy: false }])) };
+  if (l.until < Date.now()) endLink(r.token, l); else uploadLinks.set(r.token, l);
+}
+// The minimum size of every part but the last in a bucket multipart upload.
+const BUCKET_PART_MIN = 5 * 1024 * 1024;
+setInterval(() => { const now = Date.now(); for (const [t, l] of uploadLinks) if (l.until < now) endLink(t, l); }, 3600e3).unref();
+
+async function receiveUpload(req, res) {
+  const t = req.params.t;
+  const link = uploadLinks.get(t);
+  // Answers only once the whole body has been read: answering early and closing makes curl stop
+  // with "Failed sending data to the peer" (exit 55) even when the answer is ok.
+  const answer = (status, body) => {
+    const send = () => { if (!res.headersSent) res.status(status).json(body); };
+    if (req.complete || req.readableEnded) return send();
+    req.on('end', send);
+    req.on('error', () => {});
+    req.resume();
+  };
+  if (!link || link.until < Date.now()) return answer(404, { ok: false, error: 'This upload link is unknown, used or expired. Ask for a new one.' });
+  const p = db.prepare('SELECT * FROM projects WHERE id = ?').get(link.projectId);
+  const row = p && db.prepare('SELECT * FROM users WHERE id = ? AND id = ?').get(link.userId, p.user_id);
+  if (!row) { endLink(t, link); return answer(404, { ok: false, error: 'The delivery for this link was deleted.' }); }
+  const user = billing.view(row);
+  const max = Math.min(MAX_UPLOAD, spaceLeft(user));
+  const declared = Number(req.headers['content-length']);
+  const tooBig = (n) => spaceProblem(user, n) || `That file is over the ${LIMIT_TEXT} limit per file.`;
+
+  // Which piece this is, when the file comes in parts.
+  const hasPart = req.query.part !== undefined || req.query.parts !== undefined;
+  const part = Number(req.query.part), parts = Number(req.query.parts);
+  if (hasPart && !(Number.isInteger(part) && Number.isInteger(parts) && part >= 1 && parts >= 1 && part <= parts && parts <= 10000))
+    return answer(400, { ok: false, error: 'part and parts must be whole numbers with 1 <= part <= parts.' });
+  // Which file this is: its name, and the subfolder it sits in under the link's folder.
+  const name = String(req.query.name || '').replace(/[\\/\x00-\x1f]/g, '_').trim().slice(0, 255);
+  if (!name) return answer(400, { ok: false, error: 'Add the file name to the link: <link>?name=<file name> (curl --url-query "name=…" -T <file> <link>).' });
+  const folder = cleanFolder([link.folder, req.query.dir].filter(Boolean).join('/'));
+  const fileKey = `${folder || ''}\n${name}`;
+  if (!link.files.has(fileKey)) link.files.set(fileKey, { partial: null, busy: false });
+  const slot = link.files.get(fileKey);
+  if (slot.busy) return answer(409, { ok: false, error: `${name} is already being sent. Wait for it to finish.` });
+  let st = slot.partial;
+  if (hasPart) {
+    if (st && st.parts !== parts) return answer(409, { ok: false, error: `${name} was started with parts=${st.parts}. Keep sending that, or ask for a new link.` });
+    const got = st ? st.got : 0;
+    if (part <= got) return answer(200, { ok: true, part, parts, received: got, note: 'That part already arrived.' });
+    if (part !== got + 1) return answer(409, { ok: false, error: `Send part ${got + 1} next.`, next_part: got + 1 });
+    if (Number.isFinite(declared) && declared > PART_MAX) return answer(413, { ok: false, error: `Each part must be under ${PART_MAX / 1e6} MB. Split with split -b 90m.` });
+  } else if (st) {
+    return answer(409, { ok: false, error: `${name} is partway through a ${st.parts}-part upload. Send part ${st.got + 1} next.`, next_part: st.got + 1 });
+  }
+  const before = st ? st.bytes : 0;
+  if (Number.isFinite(declared) && before + declared > max) return answer(413, { ok: false, error: tooBig(before + declared) });
+
+  let type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  if (!type || type === 'application/octet-stream' || type === 'application/x-www-form-urlencoded') type = TYPE_BY_EXT[path.extname(name).toLowerCase()] || 'application/octet-stream';
+  if (storage.enabled) return receiveToBucket(req, res, { t, link, slot, fileKey, folder, p, user, declared, hasPart, part, parts, before, name, type, tooBig, answer });
+  const dir = path.join(UPLOADS, String(p.id));
+  fs.mkdirSync(dir, { recursive: true });
+  if (!st) {
+    st = { tmp: path.join(dir, `${token(12)}.part`), got: 0, bytes: 0, parts: hasPart ? parts : 1 };
+    if (hasPart) slot.partial = st;
+  }
+  const last = !hasPart || part === parts;
+  const hold = `link:${token(9)}`;
+  reserved.set(hold, { userId: user.id, size: Number.isFinite(declared) ? before + declared : max, at: Date.now() });
+  slot.busy = true;
+  let size = 0;
+  let stored = false;
+  try {
+    await new Promise((resolve, reject) => {
+      const out = fs.createWriteStream(st.tmp, { flags: before ? 'r+' : 'w', start: before });
+      req.on('data', (c) => {
+        size += c.length;
+        if (before + size > max) req.destroy(Object.assign(new Error('too big'), { code: 'ETOOBIG' }));
+        else if (hasPart && size > PART_MAX) req.destroy(Object.assign(new Error('part too big'), { code: 'EPARTBIG' }));
+      });
+      pipeline(req, out, (e) => (e ? reject(e) : resolve()));
+    });
+    if (!size) throw Object.assign(new Error('empty'), { code: 'EEMPTY' });
+    if (Number.isFinite(declared) && size !== declared) throw Object.assign(new Error(`got ${size} of ${declared} bytes`), { code: 'ESHORT' });
+    st.got += 1; st.bytes = before + size;
+    if (!last) return res.json({ ok: true, part, parts, received: st.got, next_part: st.got + 1 });
+    const f = await importFile.store(p, st.tmp, { name, type, size: st.bytes, folder });
+    stored = true;
+    res.json({ ok: true, file: { id: f.id, name: f.name, kind: f.kind, size: V.fmtSize(f.size) }, delivery: `${originOf(req)}/d/${p.share_token}` });
+  } catch (e) {
+    // The link stays usable after a failed or cut-off upload; a part can be sent again.
+    if (st.got === (hasPart ? part : 1)) st.got -= 1; // the store step failed after the last part landed
+    fs.truncate(st.tmp, before, () => {});
+    if (e.code === 'ETOOBIG') return res.status(413).json({ ok: false, error: tooBig(before + size) });
+    if (e.code === 'EPARTBIG') return res.status(413).json({ ok: false, error: `Each part must be under ${PART_MAX / 1e6} MB. Split with split -b 90m.` });
+    if (e.code === 'EEMPTY') return res.status(400).json({ ok: false, error: 'No file arrived. Send it with curl -T <file> <link>.' });
+    if (!res.headersSent) res.status(e.friendly ? 500 : 400).json({ ok: false, error: e.friendly ? e.message : `The upload was cut off: ${e.message}. Send ${hasPart ? `part ${part}` : 'it'} again.` });
+  } finally {
+    slot.busy = false;
+    reserved.delete(hold);
+    if (uploadLinks.get(t) === link) saveLink(t, link);
+    if (last && (stored || !hasPart)) { fs.rm(st.tmp, { force: true }, () => {}); if (slot.partial === st) slot.partial = null; }
+    if (stored && link.files.get(fileKey) === slot) link.files.delete(fileKey);
+  }
+}
+// With object storage set up, each piece goes straight on to the bucket as one part of a multipart
+// upload, without touching this server's disk. The disk is small (it holds the database and
+// thumbnails), and a few big files arriving at once used to fill it.
+async function receiveToBucket(req, res, { t, link, slot, fileKey, folder, p, user, declared, hasPart, part, parts, before, name, type, tooBig, answer }) {
+  if (!Number.isFinite(declared) || declared <= 0)
+    return answer(411, { ok: false, error: 'The file size is missing. Send the file with curl -T <file> <link>.' });
+  const last = !hasPart || part === parts;
+  let st = slot.partial;
+  const split = 'Split the file with split -b 90m and send the pieces in order.';
+  if (!last && declared < BUCKET_PART_MIN) return answer(400, { ok: false, error: `Every part but the last must be at least 5 MB. ${split}` });
+  if (st && st.partSize && (last ? declared > st.partSize : declared !== st.partSize))
+    return answer(400, { ok: false, error: `Every part but the last must be the same size (${st.partSize} bytes), and the last no bigger. ${split}` });
+  const hold = `link:${token(9)}`;
+  reserved.set(hold, { userId: user.id, size: before + declared, at: Date.now() });
+  slot.busy = true;
+  let stored = false;
+  try {
+    if (!st) {
+      const ext = path.extname(name).toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 12);
+      const key = `projects/${p.id}/${token(12)}${ext}`;
+      st = { key, uploadId: await storage.startUpload(key, type), got: 0, bytes: 0, parts: hasPart ? parts : 1, partSize: last ? null : declared, done: [] };
+      slot.partial = st;
+    }
+    const PartNumber = st.got + 1;
+    const ETag = await storage.putPart(st.key, st.uploadId, PartNumber, req, declared);
+    st.done.push({ PartNumber, ETag });
+    st.got = PartNumber; st.bytes += declared;
+    if (!last) return res.json({ ok: true, part, parts, received: st.got, next_part: st.got + 1 });
+    const size = await storage.completeUpload(st.key, st.uploadId, st.done);
+    slot.partial = null;
+    stored = true;
+    if (link.files.get(fileKey) === slot) link.files.delete(fileKey);
+    const f = await storeFromBucket(p, st.key, { name, type, size, folder });
+    res.json({ ok: true, file: { id: f.id, name: f.name, kind: f.kind, size: V.fmtSize(f.size) }, delivery: `${originOf(req)}/d/${p.share_token}` });
+  } catch (e) {
+    if (stored) { // in the bucket, but the delivery couldn't be updated
+      console.error('upload link store', e);
+      if (!res.headersSent) res.status(500).json({ ok: false, error: `The file arrived but couldn't be saved: ${e.message}` });
+      return;
+    }
+    if (st && st.got === (hasPart ? part : 1)) { st.got -= 1; st.bytes -= declared; st.done.pop(); } // completing failed: send the last part again
+    if (!hasPart) dropParts(slot); // a single-piece upload simply starts over
+    console.error('upload link', e.name, e.message);
+    if (!res.headersSent) res.status(400).json({ ok: false, error: `The upload was cut off: ${e.message}. Send ${hasPart ? `part ${part}` : 'it'} again.` });
+  } finally {
+    slot.busy = false;
+    reserved.delete(hold);
+    if (uploadLinks.get(t) === link) saveLink(t, link);
+  }
+}
+
+// Adds a file already in the bucket to a delivery, then makes its thumbnail from there.
+async function storeFromBucket(p, key, { name: raw, type, size, folder }) {
+  const name = String(raw || 'file').replace(/[\\/\x00-\x1f]/g, '_').slice(0, 255) || 'file';
+  const kind = kindOf(type || '', name);
+  const r = insertAsset.run(p.id, name, key, type, size, kind, 's3', p.id);
+  if (folder) setFolder.run(folder, r.lastInsertRowid);
+  await thumbFromStorage(key, kind, r.lastInsertRowid);
+  return { id: Number(r.lastInsertRowid), name, kind, size };
+}
+app.put('/up/:t', receiveUpload);
+app.post('/up/:t', receiveUpload);
 
 // ---------- thumbnails for files in object storage ----------
 // ffmpeg reads the file through this loopback-only relay, which fetches just the byte ranges it asks
@@ -673,15 +1008,19 @@ app.get('/_relay/:t', async (req, res) => {
   }
 });
 
-async function thumbFromStorage(key, kind, id) {
-  if (kind !== 'image' && kind !== 'video') return null;
+// Runs fn with a loopback URL ffmpeg can read the bucket object through.
+async function viaRelay(key, fn) {
   const t = token(18);
   relays.set(t, { key });
-  try {
-    const thumb = await makeThumb(`http://127.0.0.1:${PORT}/_relay/${t}`, kind, id);
-    if (thumb) db.prepare('UPDATE assets SET thumb_name = ? WHERE id = ?').run(thumb, id);
-    return thumb;
-  } finally { relays.delete(t); }
+  try { return await fn(`http://127.0.0.1:${PORT}/_relay/${t}`); } finally { relays.delete(t); }
+}
+
+async function thumbFromStorage(key, kind, id) {
+  if (kind !== 'image' && kind !== 'video') return null;
+  const thumb = await viaRelay(key, (url) => makeThumb(url, kind, id));
+  if (thumb) db.prepare('UPDATE assets SET thumb_name = ? WHERE id = ?').run(thumb, id);
+  queueView(id);
+  return thumb;
 }
 
 // Photos and videos in the bucket that have no thumbnail yet (an earlier attempt failed) get another
@@ -694,6 +1033,49 @@ async function backfillThumbs() {
     const ok = await thumbFromStorage(a.stored_name, a.kind, a.id).catch((e) => console.error('backfill', a.id, e.message));
     console.log(`thumbnail for asset ${a.id}: ${ok ? 'made' : 'failed'}`);
   }
+}
+
+// ---------- screen-sized views of photos ----------
+// The client gallery's cover and big viewer show a 2560 px JPEG instead of the original, so a delivery
+// of 50 MB PNGs opens as fast as one of JPEGs. Made after upload, or on first look for older photos.
+// Files in the bucket keep their view in the bucket too (views/<id>.jpg), so the server's small disk
+// doesn't fill up with them.
+const viewJobs = new Map(); // asset id -> promise of the updated asset (or null)
+function ensureView(a) {
+  if (!a || a.kind !== 'image') return Promise.resolve(null);
+  if (a.view_name) return Promise.resolve(a);
+  if (viewJobs.has(a.id)) return viewJobs.get(a.id);
+  const job = (async () => {
+    const s3 = a.storage === 's3';
+    if (s3 && !storage.enabled) return null;
+    const made = s3 ? await viaRelay(a.stored_name, (url) => makeView(url, a.id))
+      : await makeView(path.join(UPLOADS, String(a.project_id), a.stored_name), a.id);
+    if (!made) return null;
+    let name = made;
+    if (s3) {
+      const local = path.join(THUMBS, made);
+      name = `views/${a.id}.jpg`;
+      try { await storage.putFile(name, local, 'image/jpeg'); } finally { fs.rm(local, { force: true }, () => {}); }
+    }
+    // The photo may have been deleted while its view was being made.
+    if (!db.prepare('UPDATE assets SET view_name = ? WHERE id = ?').run(name, a.id).changes) {
+      if (s3) storage.remove(name); else fs.rm(path.join(THUMBS, name), { force: true }, () => {});
+      return null;
+    }
+    return { ...a, view_name: name };
+  })().catch((e) => { console.error(`view image failed for asset ${a.id}: ${e.message}`); return null; })
+    .finally(() => viewJobs.delete(a.id));
+  viewJobs.set(a.id, job);
+  return job;
+}
+const queueView = (id) => { ensureView(db.prepare('SELECT * FROM assets WHERE id = ?').get(id)); };
+
+// Photos from before views existed get theirs after each start, one at a time, newest first.
+async function backfillViews() {
+  // With a bucket set up, only photos in it: views of older photos on the small disk are made on first look.
+  const missing = db.prepare(`SELECT * FROM assets WHERE kind = 'image' AND view_name IS NULL
+    AND (storage = 's3' OR ?) ORDER BY id DESC LIMIT 500`).all(storage.enabled ? 0 : 1);
+  for (const a of missing) await ensureView(a);
 }
 
 // ---------- creator: direct uploads to object storage (R2) ----------
@@ -785,22 +1167,195 @@ const mcpUrl = (req, key) => `${originOf(req)}/mcp/${key}`;
 const keysOf = (userId) => db.prepare('SELECT id, name, hint, last_used_at, created_at FROM api_keys WHERE user_id = ? ORDER BY id DESC').all(userId);
 
 app.get('/connect', requireUser, (req, res) => {
-  res.send(V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req) }));
+  res.send(connectWith(req, {
+    vaultNotice: req.query.vault === 'connected' ? 'Your Vault is connected. Open a delivery and choose Add from Vault.' : null,
+    googleNotice: req.query.google === 'connected' ? 'Google Drive is connected. Ask your AI assistant to add files from it to any delivery.'
+      : req.query.google === 'cancelled' ? 'Google Drive wasn’t connected.' : null }));
 });
 app.post('/connect/keys', requireUser, (req, res) => {
   const name = String(req.body.name || '').trim().slice(0, 80) || 'AI assistant';
   if (keysOf(req.user.id).length >= 20)
-    return res.status(400).send(V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req), error: 'You have 20 keys. Revoke one you no longer use first.' }));
+    return res.status(400).send(connectWith(req, { error: 'You have 20 keys. Revoke one you no longer use first.' }));
   const key = newKey();
   db.prepare('INSERT INTO api_keys (user_id, name, key_hash, hint) VALUES (?, ?, ?, ?)').run(req.user.id, name, hashKey(key), key.slice(-4));
   // Shown once, on this page; only its hash is kept.
   res.set('Cache-Control', 'no-store');
-  res.send(V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req), fresh: { name, key, url: mcpUrl(req, key) } }));
+  res.send(connectWith(req, { fresh: { name, key, url: mcpUrl(req, key) } }));
 });
 app.post('/connect/keys/:kid/delete', requireUser, (req, res) => {
   db.prepare('DELETE FROM api_keys WHERE id = ? AND user_id = ?').run(req.params.kid, req.user.id);
   res.redirect('/connect');
 });
+// ---------- creator: Vault ----------
+// The creator's own storage platform. They paste its address and a read-only access key made there;
+// then each delivery page has "Add from Vault", which copies the picked files in server to server.
+const vaultView = (user) => (vault.connected(user) ? { address: user.vault_url, email: user.vault_email } : null);
+const googleView = (user) => (gdrive.enabled ? { connected: gdrive.connected(user), email: user.gdrive_email } : null);
+const connectWith = (req, extra) => V.connectPage({ user: req.user, keys: keysOf(req.user.id), origin: originOf(req), vault: vaultView(req.user), google: googleView(req.user), ...extra });
+
+app.post('/connect/vault', requireUser, async (req, res) => {
+  const address = vault.cleanAddress(req.body.address);
+  const key = String(req.body.key || '').trim();
+  const values = { address: req.body.address || '' };
+  if (!address) return res.status(400).send(connectWith(req, { vaultError: 'Enter your Vault’s address, like storage.yourstudio.com.', vaultValues: values }));
+  if (!/^spk_[\w-]{20,}$/.test(key)) return res.status(400).send(connectWith(req, { vaultError: 'Paste the access key from your Vault (it starts with spk_).', vaultValues: values }));
+  let email;
+  try { email = await vault.check(address, key); } catch (e) {
+    return res.status(400).send(connectWith(req, { vaultError: e.message, vaultValues: values }));
+  }
+  db.prepare('UPDATE users SET vault_url = ?, vault_key = ?, vault_email = ? WHERE id = ?').run(address, key, email || null, req.user.id);
+  res.redirect('/connect?vault=connected#vault');
+});
+app.post('/connect/vault/remove', requireUser, (req, res) => {
+  db.prepare('UPDATE users SET vault_url = NULL, vault_key = NULL, vault_email = NULL WHERE id = ?').run(req.user.id);
+  res.redirect('/connect#vault');
+});
+
+const needVault = (req, res, next) => (vault.connected(req.user) ? next()
+  : res.status(409).json({ ok: false, error: 'Connect your Vault first, under Connect.', connect: '/connect#vault' }));
+
+// One folder of the Vault (or its top level) for the picker.
+app.get('/vault/browse', requireUser, needVault, async (req, res) => {
+  try {
+    const r = await vault.browse(req.user, req.query.folder ? String(req.query.folder) : null);
+    res.set('Cache-Control', 'no-store');
+    res.json({ ok: true, path: r.path || [], folders: r.folders || [], files: r.files || [] });
+  } catch (e) {
+    res.status(e.status === 401 ? 409 : 502).json({ ok: false, error: e.message });
+  }
+});
+
+// A Vault file's thumbnail, passed through so the key stays on this server.
+app.get('/vault/thumb/:fileId', requireUser, needVault, async (req, res) => {
+  let r;
+  try { r = await vault.thumbnail(req.user, req.params.fileId); } catch (e) { return res.status(404).end(); }
+  const type = String(r.headers['content-type'] || '');
+  if (r.statusCode !== 200 || !/^image\/(jpeg|png|webp|gif)$/.test(type.split(';')[0].trim())) { r.resume(); return res.status(404).end(); }
+  res.set({ 'Content-Type': type, 'Cache-Control': 'private, max-age=3600', 'X-Content-Type-Options': 'nosniff' });
+  if (r.headers['content-length']) res.set('Content-Length', r.headers['content-length']);
+  r.pipe(res);
+  res.on('close', () => r.destroy());
+});
+
+// Copies run one file at a time per delivery, in the background, so a 650 MB video doesn't hold a
+// request open. The page polls for progress. Kept in memory: a restart drops copies not yet done.
+// The same queue copies files an AI assistant picked from the creator's Google Drive (src/mcp.js).
+const vaultJobs = new Map(); // project id -> { items: [{ key, from, vaultId | driveId, name, size, state, error }], running }
+const jobView = (job) => ({ ok: true, running: !!(job && job.running),
+  items: job ? job.items.map(({ key, name, size, state, error }) => ({ key, name, size, state, error })) : [] });
+
+async function runVaultJob(projectId) {
+  const job = vaultJobs.get(projectId);
+  if (!job || job.running) return;
+  job.running = true;
+  try {
+    for (let item; (item = job.items.find((i) => i.state === 'waiting'));) {
+      item.state = 'copying';
+      const p = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId);
+      const owner = p && db.prepare('SELECT * FROM users WHERE id = ?').get(p.user_id);
+      const drive = item.from === 'drive';
+      let src = null;
+      try {
+        src = !owner ? null : drive ? (gdrive.connected(owner) ? await gdrive.source(owner, item.driveId) : null) : vault.source(owner, item.vaultId);
+      } catch (e) { item.state = 'failed'; item.error = e.message; continue; }
+      if (!src) {
+        item.state = 'failed';
+        item.error = !p ? 'The delivery was deleted.' : drive ? 'Google Drive isn’t connected any more.' : 'Your Vault isn’t connected any more.';
+        continue;
+      }
+      try {
+        // Drive downloads don't carry the file's name, so the name picked earlier is used.
+        const f = await importFile(billing.view(owner), p, src.url, { headers: src.headers, folder: item.folder, filename: drive ? item.name : undefined });
+        item.state = 'done';
+        item.name = f.name;
+        item.fileId = f.id;
+      } catch (e) {
+        item.state = 'failed';
+        item.error = !/HTTP 401/.test(e.message) ? e.message
+          : drive ? gdrive.RECONNECT : 'Your Vault key was removed or is wrong. Connect your Vault again.';
+      }
+    }
+  } finally {
+    job.running = false;
+    job.finishedAt = Date.now();
+  }
+}
+// Forget finished jobs after a day.
+setInterval(() => {
+  for (const [id, j] of vaultJobs) if (!j.running && j.finishedAt && Date.now() - j.finishedAt > 24 * 3600e3) vaultJobs.delete(id);
+}, 3600e3).unref();
+
+app.get('/projects/:id/vault', requireUser, ownProject, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(jobView(vaultJobs.get(req.project.id)));
+});
+app.post('/projects/:id/vault', requireUser, ownProject, needVault, express.json({ limit: '256kb' }), (req, res) => {
+  const files = Array.isArray(req.body && req.body.files) ? req.body.files.slice(0, 500) : [];
+  const picked = files.filter((f) => f && /^[\w-]{1,64}$/.test(String(f.id || '')));
+  if (!picked.length) return res.status(400).json({ ok: false, error: 'Pick at least one file.' });
+  const full = spaceProblem(req.user, picked.reduce((n, f) => n + (Number(f.size) || 0), 0));
+  if (full) return res.status(413).json({ ok: false, error: full, upgrade: '/pricing' });
+  const folder = cleanFolder(req.body.folder);
+  let job = vaultJobs.get(req.project.id);
+  // A new batch after the last one finished starts a fresh list.
+  if (!job || (!job.running && !job.items.some((i) => i.state === 'waiting'))) vaultJobs.set(req.project.id, (job = { items: [] }));
+  for (const f of picked) {
+    job.items.push({ key: token(6), vaultId: String(f.id), name: String(f.name || 'file').slice(0, 255),
+      size: Number(f.size) || 0, folder, state: 'waiting', error: null });
+  }
+  runVaultJob(req.project.id).catch((e) => console.error('vault import', e));
+  res.json(jobView(job));
+});
+
+// Queue files for the background copy from outside a browser request (the AI assistant's tools).
+// items: [{ from: 'drive', driveId, name, size } | { from: 'vault', vaultId, name, size }].
+function queueImport(projectId, items, folder) {
+  let job = vaultJobs.get(projectId);
+  if (!job || (!job.running && !job.items.some((i) => i.state === 'waiting'))) vaultJobs.set(projectId, (job = { items: [] }));
+  for (const it of items) {
+    job.items.push({ key: token(6), from: it.from, vaultId: it.vaultId, driveId: it.driveId, name: String(it.name || 'file').slice(0, 255),
+      size: Number(it.size) || 0, folder: folder || null, state: 'waiting', error: null });
+  }
+  runVaultJob(projectId).catch((e) => console.error('import', e));
+  return job;
+}
+const importStatus = (projectId) => {
+  const job = vaultJobs.get(projectId);
+  return { running: !!(job && job.running), items: job ? job.items.map(({ name, size, folder, state, error, fileId }) => ({ name, size, folder, state, error, file_id: fileId || null })) : [] };
+};
+
+// ---------- creator: Google Drive ----------
+// Google sign-in with read-only Drive access, so an AI assistant can copy files from the creator's
+// Drive into a delivery without the files being shared publicly. Only the refresh token is kept.
+const googleRedirect = (req) => `${originOf(req)}/connect/google/callback`;
+const needGoogle = (req, res, next) => (gdrive.enabled ? next()
+  : res.status(404).send(V.messagePage('Not set up', 'Google Drive isn’t set up on this server yet.')));
+app.post('/connect/google', requireUser, needGoogle, (req, res) => {
+  const state = token(18);
+  res.cookie('cf_gstate', state, { ...cookieOpts, signed: true, maxAge: 10 * 60 * 1000 });
+  res.redirect(gdrive.authUrl(googleRedirect(req), state));
+});
+app.get('/connect/google/callback', requireUser, needGoogle, async (req, res) => {
+  const state = req.signedCookies.cf_gstate;
+  res.clearCookie('cf_gstate', cookieOpts);
+  if (req.query.error) return res.redirect('/connect?google=cancelled#google');
+  if (!state || state !== req.query.state || !req.query.code)
+    return res.status(400).send(connectWith(req, { googleError: 'That sign-in link expired. Choose Connect Google Drive again.' }));
+  try {
+    const { refresh, email } = await gdrive.finish(String(req.query.code), googleRedirect(req));
+    if (req.user.gdrive_refresh && req.user.gdrive_refresh !== refresh) gdrive.revoke(req.user.gdrive_refresh);
+    db.prepare('UPDATE users SET gdrive_refresh = ?, gdrive_email = ? WHERE id = ?').run(refresh, email || null, req.user.id);
+    res.redirect('/connect?google=connected#google');
+  } catch (e) {
+    res.status(400).send(connectWith(req, { googleError: e.message }));
+  }
+});
+app.post('/connect/google/remove', requireUser, (req, res) => {
+  if (req.user.gdrive_refresh) gdrive.revoke(req.user.gdrive_refresh);
+  db.prepare('UPDATE users SET gdrive_refresh = NULL, gdrive_email = NULL WHERE id = ?').run(req.user.id);
+  res.redirect('/connect#google');
+});
+
 // ---------- creator: profile ----------
 // One page for the creator's own account: their name and login email, the brand/studio name
 // clients see (every plan), their logo (Pro and up) and their password.
@@ -820,6 +1375,7 @@ const profilePage = (req, extra = {}) => V.profilePage({ user: req.user, canBran
 const PROFILE_NOTICES = {
   details: 'Your details are saved.', password: 'Password changed. Other devices were logged out.',
   saved: 'Brand/Studio name saved.', logo: 'Logo saved. Your deliveries show it now.', removed: 'Logo removed.',
+  photo: 'Photo saved.', photo_removed: 'Photo removed.', bio: 'Bio saved.',
   details_verify: 'Your details are saved. We sent a link to your new email; open it to confirm the address.',
   details_unsent: 'Your details are saved. Confirm your new email with the button below.',
   verify_sent: 'We sent a confirmation link to your email. It works for 2 days.',
@@ -922,19 +1478,61 @@ app.post('/profile/logo/remove', requireUser, (req, res) => {
   }
   res.redirect('/profile?notice=removed#brand');
 });
+// Profile photo and header photo, on every plan. Saved as resized JPEGs next to the logos.
+const PHOTO_MAX = 15 * 1024 * 1024;
+const photoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: PHOTO_MAX, files: 1 } }).single('photo');
+const PHOTO_KINDS = { avatar: 'avatar', header: 'header_photo' };
+// Where to go after a photo change: back to the Deliveries page when it was made there.
+const photoBack = (req, notice) => (req.body && req.body.back === 'dashboard' ? '/dashboard' : `/profile?notice=${notice}#look`);
+app.post('/profile/photo', requireUser, (req, res) => {
+  photoUpload(req, res, async (err) => {
+    const fail = (msg) => res.status(400).send(profilePage(req, { error: msg, section: 'look' }));
+    if (err) return fail(err.code === 'LIMIT_FILE_SIZE' ? 'That photo is over 15 MB. Export a smaller JPG and try again.' : 'That upload didn\'t go through. Try again.');
+    const col = PHOTO_KINDS[req.body.kind];
+    if (!col) return fail('Choose which photo this is.');
+    if (!req.file) return fail('Choose a photo first.');
+    const type = logoType(req.file.buffer);
+    if (!type || type === 'svg') return fail('Use a JPG, PNG or WebP photo.');
+    const jpg = await squashPhoto(req.file.buffer, req.body.kind);
+    if (!jpg) return fail('That photo couldn\'t be read. Try a JPG or PNG.');
+    fs.mkdirSync(BRAND, { recursive: true });
+    const name = `${req.user.id}-${req.body.kind}-${token(8)}.jpg`;
+    fs.writeFileSync(path.join(BRAND, name), jpg);
+    dropLogoFile(req.user[col]);
+    db.prepare(`UPDATE users SET ${col} = ? WHERE id = ?`).run(name, req.user.id);
+    res.redirect(photoBack(req, 'photo'));
+  });
+});
+app.post('/profile/photo/remove', requireUser, (req, res) => {
+  const col = PHOTO_KINDS[req.body.kind];
+  if (col) {
+    dropLogoFile(req.user[col]);
+    db.prepare(`UPDATE users SET ${col} = NULL WHERE id = ?`).run(req.user.id);
+  }
+  res.redirect(photoBack(req, 'photo_removed'));
+});
+app.post('/profile/bio', requireUser, (req, res) => {
+  const bio = String(req.body.bio || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+  db.prepare('UPDATE users SET bio = ? WHERE id = ?').run(bio || null, req.user.id);
+  res.redirect('/profile?notice=bio#look');
+});
+
 // Logos are public (they show on delivery pages). Each upload gets a new name, so they cache for good.
 // An SVG opened on its own runs no scripts.
 app.get('/brand/:file', (req, res) => {
   const f = req.params.file;
-  if (!/^\d+-(dark|light)-[\w-]+\.(png|jpg|webp|svg)$/.test(f)) return res.status(404).end();
+  if (!/^\d+-(dark|light|avatar|header)-[\w-]+\.(png|jpg|webp|svg)$/.test(f)) return res.status(404).end();
   res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
   res.set('X-Content-Type-Options', 'nosniff');
   res.sendFile(path.join(BRAND, f), { maxAge: '365d', immutable: true }, (e) => { if (e && !res.headersSent) res.status(404).end(); });
 });
 
+const importFile = makeImporter({ db, token, storage, kindOf, makeThumb, queueView, insertAsset, spaceProblem, spaceLeft, reserved, MAX_UPLOAD, UPLOADS, fmtSize: V.fmtSize, storeFromBucket });
+
 app.use('/mcp', mcpRouter({
-  db, token, TYPES: V.TYPES, storage, kindOf, makeThumb, insertAsset, removeAssetFiles, spaceProblem, spaceLeft, reserved,
-  usage, originOf, MAX_UPLOAD, UPLOADS, fmtSize: V.fmtSize, userView: billing.view,
+  db, token, TYPES: V.TYPES, deleteDelivery, removeAssetFiles, importFile, usage, originOf, fmtSize: V.fmtSize, userView: billing.view,
+  gdrive, vault, queueImport, importStatus, spaceProblem, cleanFolder,
+  makeUploadLink,
 }));
 
 // ---------- client: delivery ----------
@@ -955,10 +1553,12 @@ function loadDelivery(req, res, next) {
       p = { ...whole, share_token: req.params.token, title: `${whole.title} · ${f.path.split('/').pop()}` };
     }
   }
-  if (!p) return res.status(404).send(V.messagePage('Link not found', 'This delivery link is invalid or has been replaced.'));
+  if (!p) return res.status(404).send(V.messagePage('Link not found', 'This delivery link is invalid, has been replaced, or the delivery was removed.'));
   const isOwner = req.user && req.user.id === p.user_id;
   if (!isOwner && p.expires_at && new Date(`${p.expires_at}T23:59:59Z`) < new Date())
     return res.status(410).send(V.messagePage('Delivery expired', 'This delivery is no longer available. Contact your creator for a new link.'));
+  if (!isOwner && retention.isDue(p))
+    return res.status(410).send(V.messagePage('Delivery removed', 'These files were removed after they were downloaded. Contact your creator if you need them again.'));
   req.project = p;
   req.isOwner = isOwner;
   req.unlocked = isOwner || !p.password_hash || req.signedCookies[`cf_unlock_${p.id}`] === unlockValue(p);
@@ -966,7 +1566,11 @@ function loadDelivery(req, res, next) {
 }
 const requireUnlocked = (req, res, next) => (req.unlocked ? next() : res.status(401).send('Locked'));
 const track = (req, type, assetId = null) => {
-  if (!req.isOwner) db.prepare('INSERT INTO events (project_id, asset_id, type) VALUES (?, ?, ?)').run(req.project.id, assetId, type);
+  if (req.isOwner) return;
+  db.prepare('INSERT INTO events (project_id, asset_id, type) VALUES (?, ?, ?)').run(req.project.id, assetId, type);
+  // The client's first download starts the auto-delete countdown.
+  if ((type === 'download' || type === 'zip') && req.project.auto_delete && !req.project.delete_at)
+    db.prepare('UPDATE projects SET delete_at = ? WHERE id = ? AND auto_delete = 1 AND delete_at IS NULL').run(retention.deleteAtFrom(retention.daysOf(req.project)), req.project.id);
 };
 const inScope = (req, a) => !req.scope || a.folder === req.scope || (a.folder || '').startsWith(req.scope + '/');
 const getAsset = (req) => {
@@ -991,7 +1595,7 @@ app.get('/d/:token', loadDelivery, (req, res) => {
   const assets = deliveryAssets(req);
   // Through a folder link, the order is the same but read from inside that folder.
   const order = folderOrderOf(p.id).filter((f) => !req.scope || f.startsWith(req.scope + '/')).map((f) => (req.scope ? f.slice(req.scope.length + 1) : f));
-  res.send(V.deliveryPage({ project: p, assets, studio, brand, host: req.get('host'), folderOrder: order }));
+  res.send(V.deliveryPage({ project: p, assets, studio, brand, host: req.get('host'), folderOrder: order, sorts: sortsOf(p.id, req.scope) }));
 });
 
 app.post('/d/:token/unlock', loadDelivery, (req, res) => {
@@ -1030,6 +1634,25 @@ async function sendFromStorage(res, a, attachment) {
 // Files on this server's disk come from the site's own address, so they also get a sandbox: even if
 // a browser did render one as a page, it couldn't run scripts or act as the signed-in creator.
 const fileHeaders = { 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': 'sandbox' };
+
+// A photo at screen size (see ensureView) for the gallery's cover and viewer. Falls back to the
+// original when a view can't be made (a format ffmpeg can't read).
+app.get('/d/:token/view/:aid', loadDelivery, requireUnlocked, async (req, res) => {
+  let a = getAsset(req);
+  if (!a) return res.sendStatus(404);
+  if (a.kind === 'image' && !a.view_name) a = (await ensureView(a)) || a;
+  if (!a.view_name) return res.redirect(302, `/d/${req.params.token}/media/${a.id}`);
+  res.set({ 'Cache-Control': 'private, max-age=604800', 'X-Content-Type-Options': 'nosniff' });
+  if (a.storage !== 's3') return res.sendFile(path.join(THUMBS, a.view_name), (e) => { if (e && !res.headersSent) res.sendStatus(404); });
+  try {
+    const body = await storage.getStream(a.view_name);
+    res.type('image/jpeg');
+    pipeline(body, res, () => {});
+  } catch (e) {
+    console.error('view', a.id, e.name, e.message);
+    if (!res.headersSent) res.redirect(302, `/d/${req.params.token}/media/${a.id}`);
+  }
+});
 
 // Inline streaming (sendFile handles HTTP Range requests for video seeking).
 app.get('/d/:token/media/:aid', loadDelivery, requireUnlocked, async (req, res) => {
@@ -1146,13 +1769,16 @@ if (require.main === module) {
     if (rss > Number(process.env.MEMORY_WARN_MB || 700) && Date.now() - warned > 5 * 60e3) { warned = Date.now(); console.warn('[memory] high:', mb()); }
   }, 15e3).unref();
   try { sweepUnfinishedUploads(); } catch (e) { console.error('cleanup failed', e); }
+  try { deleteDueDeliveries(); } catch (e) { console.error('[auto-delete] failed', e); }
+  setInterval(() => { try { deleteDueDeliveries(); } catch (e) { console.error('[auto-delete] failed', e); } }, 3600e3).unref();
   console.log(`Files are stored in ${storage.enabled ? `object storage, ${storage.describe}` : storage.describe}`);
   const server = app.listen(PORT, () => {
     console.log(`ContentFlows running on http://localhost:${PORT}`);
-    setTimeout(() => backfillThumbs().catch((e) => console.error('backfill', e)), 2000);
+    setTimeout(() => backfillThumbs().catch((e) => console.error('backfill', e)).then(() => backfillViews()).catch((e) => console.error('views backfill', e)), 2000);
     billing.labelOldCustomers().catch((e) => console.error('stripe mode check', e.message));
   });
   // Node cuts any request after 5 minutes by default, which kills big uploads on slow connections.
   server.requestTimeout = 2 * 3600 * 1000;
 }
 module.exports = app;
+app.deleteDueDeliveries = deleteDueDeliveries;

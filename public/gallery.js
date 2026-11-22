@@ -7,26 +7,62 @@
   const tiles = [...document.querySelectorAll('.dl-tile')];
   let open = () => {};
 
+  // ---- Hero cover: fill the screen when the frame roughly matches it, otherwise show it whole ----
+  // A portrait photo stretched across a desktop screen only shows a band through the middle,
+  // so when filling would cut away more than about a quarter of its height, show all of it instead.
+  // Wide frames on a tall phone keep filling the screen, as before.
+  const hero = document.querySelector('.dl-hero');
+  const heroMedia = hero && hero.querySelector('.fs-media');
+  if (heroMedia) {
+    const fit = () => {
+      const w = heroMedia.naturalWidth || heroMedia.videoWidth, h = heroMedia.naturalHeight || heroMedia.videoHeight;
+      if (!w || !h) return;
+      const screen = hero.clientWidth / hero.clientHeight, frame = w / h;
+      hero.classList.toggle('is-fit', frame / screen < 0.75);
+    };
+    heroMedia.addEventListener(heroMedia.tagName === 'VIDEO' ? 'loadedmetadata' : 'load', fit);
+    if (heroMedia.complete || heroMedia.readyState >= 1) fit();
+    addEventListener('resize', fit);
+  }
+
   // ---- Filter: All / Photos / Films, with a dot that slides under the active option ----
   const filter = document.querySelector('.dl-filter');
   let mode = 'all';
   const visible = () => tiles.filter((t) => mode === 'all' || t.dataset.kind === mode).map((t) => +t.dataset.index);
 
-  // ---- Even rows: when the tiles don't fill the last row, the first one widens so every row is full ----
-  // Each folder has its own grid, so rows are balanced per grid; a folder with nothing to show is hidden.
+  // ---- Masonry: every tile keeps the real shape of its photo or film, so vertical shots show whole ----
+  // Tiles stay in reading order: each one goes into the shortest column, left to right on ties.
+  // The shape comes from the page (data-ar); a tile without one takes its image's own size once it
+  // loads, and the layout is redone. Each folder has its own grid; a folder with nothing to show is hidden.
   const grids = [...document.querySelectorAll('.dl-grid')];
+  const ratio = (t) => +t.dataset.ar || 1.6;
+  tiles.forEach((t) => {
+    const img = t.querySelector('img');
+    if (t.dataset.ar || !img) return;
+    const learn = () => { if (img.naturalWidth && img.naturalHeight) { t.dataset.ar = Math.min(3, Math.max(0.4, img.naturalWidth / img.naturalHeight)); relayout(); } };
+    img.complete ? learn() : img.addEventListener('load', learn, { once: true });
+  });
+  let rq = 0;
+  const relayout = () => { cancelAnimationFrame(rq); rq = requestAnimationFrame(balance); };
   function balance() {
-    tiles.forEach((t) => { t.classList.remove('wide', 'wide-full'); t.style.gridColumn = ''; });
+    const cols = matchMedia('(max-width: 1023px)').matches ? 2 : 3;
+    const gap = matchMedia('(max-width: 767px)').matches ? 8 : 12;
     grids.forEach((grid) => {
       const shown = [...grid.querySelectorAll('.dl-tile')].filter((t) => !t.classList.contains('is-out'));
       grid.closest('.dl-group')?.classList.toggle('is-out', !shown.length);
-      if (!shown.length) return;
-      const cols = getComputedStyle(grid).gridTemplateColumns.split(' ').length;
-      const r = shown.length % cols;
-      if (!r || shown.length < 2) return;
-      const span = cols - r + 1;
-      shown[0].style.gridColumn = `span ${span}`;
-      shown[0].classList.add(span === cols ? 'wide-full' : 'wide');
+      const width = grid.clientWidth;
+      if (!shown.length || !width) return; // a closed folder is laid out when it opens
+      const colW = (width - gap * (cols - 1)) / cols;
+      const heights = new Array(Math.min(cols, shown.length)).fill(0);
+      shown.forEach((t) => {
+        const c = heights.indexOf(Math.min(...heights));
+        const h = colW / ratio(t);
+        t.style.left = `${c * (colW + gap)}px`; t.style.top = `${heights[c]}px`;
+        t.style.width = `${colW}px`; t.style.height = `${h}px`;
+        heights[c] += h + gap;
+      });
+      grid.style.height = `${Math.max(...heights) - gap}px`;
+      grid.classList.add('is-masonry');
     });
   }
   // ---- Folders start closed; the client opens the ones they want with the arrow or the name.
