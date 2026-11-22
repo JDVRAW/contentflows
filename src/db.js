@@ -174,5 +174,23 @@ if (!projectCols.has('auto_delete_days')) {
   db.exec('UPDATE projects SET auto_delete = 0, delete_at = NULL');
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_projects_delete_at ON projects(delete_at)');
+// Whether the creator has confirmed they own their login email (by opening a link sent to it).
+// Accounts made before this check existed count as confirmed.
+if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'email_verified')) {
+  db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0');
+  db.exec('UPDATE users SET email_verified = 1');
+}
+// Confirmation links sent to creators. Only a hash of each link's token is kept.
+db.exec(`
+CREATE TABLE IF NOT EXISTS email_checks (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  email TEXT NOT NULL,
+  token_hash TEXT UNIQUE NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_email_checks_user ON email_checks(user_id);
+`);
 
 module.exports = { db, DATA_DIR };

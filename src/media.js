@@ -50,7 +50,7 @@ function makeView(srcPath, id) {
     const out = `${id}-v.jpg`;
     const outPath = path.join(DATA_DIR, 'thumbs', out);
     const fit = `scale='if(gte(iw,ih),min(${VIEW_EDGE},iw),-2)':'if(gte(iw,ih),-2,min(${VIEW_EDGE},ih))'`;
-    const args = ['-y', '-loglevel', 'error', '-i', srcPath, '-frames:v', '1', '-vf', fit, '-q:v', '3', outPath];
+    const args = ['-y', '-loglevel', 'error', ...safeInput(srcPath), '-i', srcPath, '-frames:v', '1', '-vf', fit, '-q:v', '3', outPath];
     execFile(process.env.FFMPEG_PATH || 'ffmpeg', args, { timeout: /^https?:/.test(srcPath) ? 180000 : 90000 }, (err, so, stderr) => {
       if (!err && fs.existsSync(outPath)) return resolve(out);
       console.error(`view image failed for asset ${id}: ${reason(err || {}, stderr)}`);
@@ -60,10 +60,19 @@ function makeView(srcPath, id) {
   }));
 }
 
+const FORMATS = 'mov,matroska,avi,mpegts,flv,mxf,mpeg,mjpeg,gif,image2,png_pipe,jpeg_pipe,webp_pipe,tiff_pipe,bmp_pipe,jpegxl_pipe,heif';
+
+// Input options for an untrusted file: see runThumb.
+const safeInput = (src) => ['-protocol_whitelist', src === 'pipe:0' ? 'pipe' : /^https?:/.test(src) ? 'http,tcp' : 'file', '-format_whitelist', FORMATS];
+
 function runThumb(srcPath, kind, id) {
   const out = `${id}.jpg`;
   const outPath = path.join(DATA_DIR, 'thumbs', out);
   const args = ['-y', '-loglevel', 'error'];
+  // Uploaded files are untrusted. Only plain photo and video formats may be opened, and only the one
+  // file (or the loopback relay) itself: no playlists or file lists that point ffmpeg at other files
+  // on this server or at other addresses.
+  args.push(...safeInput(srcPath));
   if (kind === 'video') args.push('-ss', '1');
   args.push('-i', srcPath, '-frames:v', '1', '-vf', "scale='min(1200,iw)':-2", '-q:v', '4', outPath);
   const opts = { timeout: /^https?:/.test(srcPath) ? 120000 : 60000 };
@@ -123,7 +132,7 @@ const PHOTO_FILTERS = {
 };
 function squashPhoto(buf, mode) {
   return new Promise((resolve) => {
-    const child = execFile('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-vf', PHOTO_FILTERS[mode],
+    const child = execFile('ffmpeg', ['-hide_banner', '-loglevel', 'error', ...safeInput('pipe:0'), '-i', 'pipe:0', '-vf', PHOTO_FILTERS[mode],
       '-frames:v', '1', '-q:v', '3', '-f', 'image2', '-c:v', 'mjpeg', 'pipe:1'],
     { encoding: 'buffer', maxBuffer: 30 * 1024 * 1024, timeout: 30000 }, (err, stdout, stderr) => {
       if (err || !stdout.length) { console.error(`photo resize failed: ${err ? reason(err, stderr) : 'no output'}`); return resolve(null); }
