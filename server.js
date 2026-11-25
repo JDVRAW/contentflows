@@ -1772,6 +1772,8 @@ if (require.main === module) {
   try { deleteDueDeliveries(); } catch (e) { console.error('[auto-delete] failed', e); }
   setInterval(() => { try { deleteDueDeliveries(); } catch (e) { console.error('[auto-delete] failed', e); } }, 3600e3).unref();
   console.log(`Files are stored in ${storage.enabled ? `object storage, ${storage.describe}` : storage.describe}`);
+  if (storage.cdn) console.log('Clients download through CloudFront');
+  if (storage.cdnPartlySet) console.warn('CloudFront is partly set up: set CLOUDFRONT_DOMAIN, CLOUDFRONT_KEY_PAIR_ID and CLOUDFRONT_PRIVATE_KEY, or none of them. Downloads come straight from the bucket meanwhile.');
   const server = app.listen(PORT, () => {
     console.log(`ContentFlows running on http://localhost:${PORT}`);
     setTimeout(() => backfillThumbs().catch((e) => console.error('backfill', e)).then(() => backfillViews()).catch((e) => console.error('views backfill', e)), 2000);
