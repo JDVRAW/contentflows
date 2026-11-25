@@ -103,7 +103,7 @@ npm start            # http://localhost:3000
 | `MAX_UPLOAD_MB` | `10240` | Max size per file |
 | `FFMPEG_PATH` | `ffmpeg` | Path to ffmpeg binary |
 | `NODE_ENV` | | Set to `production` for secure cookies (HTTPS) |
-| `S3_ENDPOINT` | | Object storage address, e.g. `https://<account-id>.r2.cloudflarestorage.com` (a bucket name on the end is ignored) |
+| `S3_ENDPOINT` | | Object storage address, e.g. `https://<account-id>.r2.cloudflarestorage.com` (a bucket name on the end is ignored). Not needed for Amazon S3: set `S3_REGION` instead |
 | `S3_BUCKET` | | Bucket name |
 | `S3_ACCESS_KEY_ID` | | Access key of an API token with object read and write on the bucket |
 | `S3_SECRET_ACCESS_KEY` | | Its secret |
@@ -114,14 +114,17 @@ npm start            # http://localhost:3000
 | `MAIL_SITE_DAILY_LIMIT` | `500` | Emails the whole site sends per 24 hours (delivery emails and confirmation links together) |
 | `SIGNUPS_PER_HOUR` | `5` | New accounts allowed from one address per hour |
 | `TRUST_PROXY_HOPS` | `1` | Proxies in front of the app whose X-Forwarded-For entry is trusted (Railway: 1) |
-| `S3_REGION` | `auto` | Region (R2 uses `auto`) |
+| `S3_REGION` | `auto` | Region. Amazon S3: the bucket's region, e.g. `us-east-1`. R2 uses `auto` |
+| `CLOUDFRONT_DOMAIN` | | Amazon S3 only, optional: the CloudFront distribution's address, e.g. `d111111abcdef8.cloudfront.net`. With the two below, clients download through CloudFront |
+| `CLOUDFRONT_KEY_PAIR_ID` | | ID of the public key in the distribution's trusted key group |
+| `CLOUDFRONT_PRIVATE_KEY` | | That key's private half (PEM). On one line with `\n` for line breaks also works |
 | `S3_FORCE_PATH_STYLE` | | Set to `1` for services that need path-style URLs (MinIO, local test servers) |
 | `STRIPE_SECRET_KEY` | | Stripe secret key (`sk_live_…` or `sk_test_…`). Turns on paid plans |
 | `STRIPE_WEBHOOK_SECRET` | | Signing secret of the webhook endpoint (`whsec_…`) |
 | `AUTO_DELETE_DAYS` | `7` | Countdown suggested when a creator turns on auto-delete |
 | `OWNER_EMAILS` | | Comma-separated login emails with no storage limit (the people running the site). Only counts once that email is confirmed |
 
-When all four `S3_*` values are set, new uploads go to the bucket and clients stream and download them through signed links that last 6 hours. Without them, files are kept in `DATA_DIR/uploads`. Files uploaded before the switch keep working from the disk.
+When the bucket, key, secret and either `S3_REGION` (Amazon S3) or `S3_ENDPOINT` (R2 and others) are set, new uploads go to the bucket and clients stream and download them through signed links that last 6 hours. Without them, files are kept in `DATA_DIR/uploads`. Files uploaded before the switch keep working from the disk.
 
 ## Deploy
 
@@ -162,6 +165,45 @@ If something is off, the upload row says what: a wrong bucket name, a missing `E
 
 Keep the bucket's **Public access** (public development URL and custom domains) turned off. Clients only ever reach files through signed links the app creates after checking the delivery's password and expiry.
 
+### Amazon S3 for the files
+
+The same direct uploads and signed downloads work with an Amazon S3 bucket. One difference matters: R2 has no download fees, while S3 charges about $0.09 per GB clients download (after 100 GB a month). Put CloudFront in front for downloads (step 5): its free tier covers 1 TB a month. Uploads go straight to the bucket either way, and data going into AWS is free.
+
+1. In the AWS console, open **S3 → Create bucket**. Pick a name (e.g. `contentflows-files`) and a region close to your clients (e.g. `us-east-1`). Leave **Block all public access** on.
+2. In the bucket's **Permissions → Cross-origin resource sharing (CORS)**, add:
+   ```json
+   [{"AllowedOrigins":["https://your-site.com"],"AllowedMethods":["GET","PUT","HEAD"],"AllowedHeaders":["*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3600}]
+   ```
+   `ExposeHeaders: ETag` is required: the browser reads it from each uploaded part.
+3. In the bucket's **Management → Lifecycle rules**, add a rule for the whole bucket with **Delete expired object delete markers or incomplete multipart uploads → Incomplete multipart uploads, 7 days**, so abandoned uploads don't keep costing storage.
+4. In **IAM → Users → Create user** (e.g. `contentflows-app`), attach this inline policy (put your bucket name in), then under **Security credentials → Create access key** (type "Application running outside AWS") copy the key and secret:
+   ```json
+   {"Version":"2012-10-17","Statement":[
+     {"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject","s3:AbortMultipartUpload","s3:ListMultipartUploadParts"],"Resource":"arn:aws:s3:::contentflows-files/*"},
+     {"Effect":"Allow","Action":["s3:ListBucket"],"Resource":"arn:aws:s3:::contentflows-files"}]}
+   ```
+5. Downloads through CloudFront (recommended):
+   1. Make a key pair on your computer: `openssl genrsa -out cf-private.pem 2048 && openssl rsa -in cf-private.pem -pubout -out cf-public.pem`.
+   2. In **CloudFront → Key management → Public keys**, add `cf-public.pem` and note its **ID**. Then in **Key groups**, create one with that key.
+   3. In **CloudFront → Policies → Origin request**, create a policy (e.g. `contentflows-downloads`) with **Query strings: Include specified**, `response-content-disposition` and `response-content-type`; headers and cookies: none.
+   4. **Create distribution**: origin = the S3 bucket, **Origin access: Origin access control** (create one and let CloudFront update the bucket policy, or copy the policy it shows into the bucket's **Permissions → Bucket policy**). Viewer protocol: Redirect HTTP to HTTPS. Allowed methods: GET, HEAD. **Restrict viewer access: Yes, trusted key groups**, with the key group above. Cache policy: **CachingDisabled**. Origin request policy: the one from step 3. No web application firewall needed.
+   5. Note the distribution's domain, e.g. `d111111abcdef8.cloudfront.net`.
+6. In Railway → **Variables**, set `S3_REGION` (e.g. `us-east-1`), `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, and remove `S3_ENDPOINT`. With CloudFront, also set `CLOUDFRONT_DOMAIN`, `CLOUDFRONT_KEY_PAIR_ID` (the public key's ID) and `CLOUDFRONT_PRIVATE_KEY` (the contents of `cf-private.pem`). The log line at start says `Amazon S3 (<region>)` and `Clients download through CloudFront`.
+
+#### Moving existing files from R2 to S3
+
+`scripts/copy-to-s3.js` copies every object from the old bucket to the new one under the same names, so the database needs no change and old links keep working. It streams each file from bucket to bucket, skips files already copied with the same size, and retries failures, so it can be run as often as needed. Leaving R2 costs nothing (no download fees).
+
+```bash
+FROM_S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com FROM_S3_BUCKET=contentflows \
+FROM_S3_ACCESS_KEY_ID=... FROM_S3_SECRET_ACCESS_KEY=... \
+S3_REGION=us-east-1 S3_BUCKET=contentflows-files S3_ACCESS_KEY_ID=... S3_SECRET_ACCESS_KEY=... \
+npm run copy-to-s3 -- --dry-run      # lists what would be copied
+# same variables, without --dry-run, to copy
+```
+
+Order for a switch with no lost files: run the copy once (the bulk, while the site keeps using R2), switch the Railway variables to S3, then run the copy again right after the redeploy to pick up anything uploaded in between. Keep the R2 bucket for a week or two before deleting it.
+
 ### Stripe for paid plans
 
 Plans and prices live in `src/plans.js`. The matching Stripe products and prices are created automatically the first time someone picks a plan (lookup keys `cf_pro_month`, `cf_pro_year`, `cf_studio_month`, `cf_studio_year`), so nothing has to be set up by hand in Stripe's product catalog.
@@ -190,7 +232,8 @@ Emails go out as "Studio name via ContentFlows <deliveries@yourdomain.com>" with
 server.js        routes: auth, creator dashboard, uploads, client delivery, downloads
 src/db.js        SQLite schema (users, sessions, projects, assets, events)
 src/media.js     file type detection and ffmpeg thumbnails
-src/storage.js   object storage (R2/S3): multipart uploads, signed links
+src/storage.js   object storage (Amazon S3, R2): multipart uploads, signed links (S3 or CloudFront)
+scripts/copy-to-s3.js  copies every file from one bucket to another (R2 to S3)
 src/plans.js     storage plans, prices and limits
 src/billing.js   Stripe: checkout, plan changes, cancel, billing portal, webhook
 src/mail.js      Resend email and the branded delivery email

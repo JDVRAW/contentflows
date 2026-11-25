@@ -1,5 +1,5 @@
-// Object storage (Cloudflare R2 or any S3-compatible service) for uploaded files.
-// When S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY are set, browsers upload
+// Object storage (Amazon S3, Cloudflare R2 or any S3-compatible service) for uploaded files.
+// When S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY and S3_REGION (Amazon) or S3_ENDPOINT (others) are set, browsers upload
 // straight to the bucket in parts (multipart upload with presigned URLs), so big videos never pass
 // through this server. Clients stream and download through short-lived signed links.
 // Without those variables, files stay on the local disk as before.
@@ -8,26 +8,46 @@ const {
   AbortMultipartUploadCommand, HeadObjectCommand, GetObjectCommand, DeleteObjectCommand, PutObjectCommand,
 } = require('@aws-sdk/client-s3');
 const fs = require('fs');
+const crypto = require('crypto');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 // Values pasted into a host's settings often carry stray spaces or quotes.
 const val = (k) => String(process.env[k] || '').trim().replace(/^(["'])(.*)\1$/, '$2').trim();
-const REQUIRED = ['S3_ENDPOINT', 'S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'];
-const missing = REQUIRED.filter((k) => !val(k));
+// Amazon S3 needs a region and no address (the SDK knows it); R2 and others need an address.
+const awsRegion = (host) => (host.match(/^(?:[^.]+\.)?s3[.-]([a-z0-9-]+)\.amazonaws\.com$/) || [])[1] || null;
+const rawEndpoint = val('S3_ENDPOINT');
+const endpointUrl = rawEndpoint ? new URL(/^https?:\/\//.test(rawEndpoint) ? rawEndpoint : `https://${rawEndpoint}`) : null;
+const isAws = endpointUrl ? /(^|\.)amazonaws\.com$/.test(endpointUrl.hostname) : !!val('S3_REGION') && val('S3_REGION') !== 'auto';
+const region = (val('S3_REGION') && val('S3_REGION') !== 'auto' ? val('S3_REGION') : null)
+  || (endpointUrl && awsRegion(endpointUrl.hostname)) || (isAws ? 'us-east-1' : 'auto');
+const REQUIRED = [isAws ? 'S3_REGION' : 'S3_ENDPOINT', 'S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'];
+const missing = REQUIRED.filter((k) => !val(k) && !(k === 'S3_REGION' && endpointUrl));
 const enabled = missing.length === 0;
 const Bucket = enabled ? val('S3_BUCKET') : null;
 // Cloudflare shows the bucket's S3 address with the bucket name on the end; only the host part is needed.
-const endpoint = enabled ? new URL(/^https?:\/\//.test(val('S3_ENDPOINT')) ? val('S3_ENDPOINT') : `https://${val('S3_ENDPOINT')}`).origin : null;
-const describe = enabled ? `bucket "${Bucket}" at ${new URL(endpoint).host}` : `local disk (missing ${missing.join(', ')})`;
+const endpoint = enabled && !isAws ? endpointUrl.origin : null;
+const describe = enabled ? `bucket "${Bucket}" at ${isAws ? `Amazon S3 (${region})` : new URL(endpoint).host}` : `local disk (missing ${missing.join(', ')})`;
 const client = enabled ? new S3Client({
-  region: val('S3_REGION') || 'auto',
-  endpoint,
+  region,
+  ...(endpoint ? { endpoint } : {}),
   forcePathStyle: val('S3_FORCE_PATH_STYLE') === '1',
   // Without these, newer SDKs add checksum parameters to signed URLs that a browser PUT can't satisfy.
   requestChecksumCalculation: 'WHEN_REQUIRED',
   responseChecksumValidation: 'WHEN_REQUIRED',
   credentials: { accessKeyId: val('S3_ACCESS_KEY_ID'), secretAccessKey: val('S3_SECRET_ACCESS_KEY') },
 }) : null;
+
+// Optional: clients download through Amazon CloudFront instead of straight from the bucket. Downloads
+// straight from S3 are billed per GB; CloudFront's free tier covers the first 1 TB a month. Needs the
+// distribution's address, the ID of a public key in a trusted key group, and that key's private half.
+const cf = {
+  domain: val('CLOUDFRONT_DOMAIN').replace(/^https?:\/\//, '').replace(/\/+$/, ''),
+  keyPairId: val('CLOUDFRONT_KEY_PAIR_ID'),
+  // Hosts' settings often keep a PEM on one line with literal \n.
+  privateKey: val('CLOUDFRONT_PRIVATE_KEY').replace(/\\n/g, '\n'),
+};
+const cdn = enabled && !!(cf.domain && cf.keyPairId && cf.privateKey);
+const cdnPartlySet = !cdn && [cf.domain, cf.keyPairId, cf.privateKey].some(Boolean);
 
 const MiB = 1024 * 1024;
 // Parts must be at least 5 MiB and all the same size except the last; S3 allows 10,000 parts.
@@ -134,7 +154,26 @@ async function putStream(Key, stream, ContentType, sizeHint) {
 const disposition = (type, name) =>
   `${type}; filename="${name.replace(/[^\x20-\x7e]|["\\]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 
-function signedGet(Key, { name, contentType, attachment = false, expiresIn = 6 * 3600 } = {}) {
+// CloudFront's URL-safe base64 for signatures and policies.
+const cfBase64 = (buf) => buf.toString('base64').replace(/\+/g, '-').replace(/=/g, '_').replace(/\//g, '~');
+
+// A CloudFront signed link (canned policy) for one object. The response-* parameters pass through to
+// S3, so the file name and type work as with S3 links; the distribution has to forward them.
+function cloudfrontGet(Key, { name, contentType, attachment, expiresIn }) {
+  const q = new URLSearchParams();
+  if (name) q.set('response-content-disposition', disposition(attachment ? 'attachment' : 'inline', name));
+  if (contentType) q.set('response-content-type', contentType);
+  const path = Key.split('/').map(encodeURIComponent).join('/');
+  const qs = q.toString().replace(/\+/g, '%20');
+  const url = `https://${cf.domain}/${path}${qs ? `?${qs}` : ''}`;
+  const expires = Math.floor(Date.now() / 1000) + expiresIn;
+  const policy = JSON.stringify({ Statement: [{ Resource: url, Condition: { DateLessThan: { 'AWS:EpochTime': expires } } }] });
+  const signature = cfBase64(crypto.createSign('RSA-SHA1').update(policy).sign(cf.privateKey));
+  return `${url}${qs ? '&' : '?'}Expires=${expires}&Signature=${signature}&Key-Pair-Id=${encodeURIComponent(cf.keyPairId)}`;
+}
+
+async function signedGet(Key, { name, contentType, attachment = false, expiresIn = 6 * 3600 } = {}) {
+  if (cdn) return cloudfrontGet(Key, { name, contentType, attachment, expiresIn });
   return getSignedUrl(client, new GetObjectCommand({
     Bucket, Key,
     ResponseContentType: contentType || undefined,
@@ -155,4 +194,4 @@ const remove = (Key) => client.send(new DeleteObjectCommand({ Bucket, Key })).ca
 // Some S3 variables set but not all: almost always a setup slip worth pointing out.
 const partlySet = missing.length > 0 && missing.length < REQUIRED.length ? missing : null;
 
-module.exports = { enabled, describe, partlySet, partSizeFor, startUpload, signParts, completeUpload, abortUpload, putPart, signedGet, getRange, getStream, remove, disposition, putFile, putStream };
+module.exports = { enabled, describe, partlySet, cdn, cdnPartlySet, Bucket, client, partSizeFor, startUpload, signParts, completeUpload, abortUpload, putPart, signedGet, getRange, getStream, remove, disposition, putFile, putStream };
